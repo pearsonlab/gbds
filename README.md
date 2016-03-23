@@ -2,4 +2,4 @@
 
 Reference implementation of the algorithm described in 
 
-> *Black box variational inference for state space models*, Evan Archer, Il Memming Park, Lars Buesing, John Cunningham, Liam Paninski
+>  E Archer, IM Memming Park, L Buesing, J Cunningham, L Paninski (2015). [*Black box variational inference for state space models*](http://arxiv.org/abs/1511.07367)
