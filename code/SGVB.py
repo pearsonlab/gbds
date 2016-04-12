@@ -64,7 +64,6 @@ class SGVB():#(Trainable):
            - Titsias and Lazaro-Gredilla (ICML, 2014)
     '''
     def __init__(self,
-                opt_params, # dictionary of optimization parameters
                 gen_params, # dictionary of generative model parameters
                 GEN_MODEL,  # class that inherits from GenerativeModel
                 rec_params, # dictionary of approximate posterior ("recognition model") parameters
@@ -73,8 +72,6 @@ class SGVB():#(Trainable):
                 yDim=2 # dimensionality of observations
                 ):
 
-#        super(SGVB, self).__init__(**opt_params)
-
         # instantiate rng's
         self.srng = RandomStreams(seed=234)
         self.nrng = np.random.RandomState(124)
@@ -82,13 +79,12 @@ class SGVB():#(Trainable):
         #---------------------------------------------------------
         ## actual model parameters
         self.X, self.Y = T.matrices('X','Y')   # symbolic variables for the data
-        self.indices = T.lvector('indices')
 
         self.xDim   = xDim
         self.yDim   = yDim
 
         # instantiate our prior & recognition models
-        self.mrec   = REC_MODEL(rec_params, self.Y, self.indices, self.xDim, self.yDim, self.srng, self.nrng)
+        self.mrec   = REC_MODEL(rec_params, self.Y, self.xDim, self.yDim, self.srng, self.nrng)
         self.mprior = GEN_MODEL(gen_params, self.xDim, self.yDim, srng=self.srng, nrng = self.nrng)
 
         self.isTrainingRecognitionModel = True;
@@ -130,16 +126,15 @@ class SGVB():#(Trainable):
         self.isTrainingGenerativeModel = False;
         print('Enable switching training/test mode in generative model class!\n')
 
-    def cost(self,Y):
+    def cost(self):
         '''
         Compute a one-sample approximation the ELBO (lower bound on marginal likelihood), normalized by batch size (length of Y in first dimension).
         '''
         q = self.mrec.getSample()
-        Input = T.zeros_like(q)
 
         theentropy = self.mrec.evalEntropy()
-        thelik =  self.mprior.evaluateLogDensity(Input,q,Y)
+        thelik =  self.mprior.evaluateLogDensity(q,self.Y)
 
         thecost = thelik + theentropy
 
-        return thecost/Y.shape[0]
+        return thecost/self.Y.shape[0]

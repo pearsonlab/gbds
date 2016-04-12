@@ -107,17 +107,17 @@ class LDS(GenerativeModel):
             self.A      = theano.shared(value=GenerativeParams['A'].astype(theano.config.floatX), name='A'     ,borrow=True)     # dynamics matrix
         else:
             # TBD:MAKE A BETTER WAY OF SAMPLING DEFAULT A
-            self.A      = theano.shared(value=np.diag(np.random.rand(xDim).astype(theano.config.floatX)), name='A'     ,borrow=True)     # dynamics matrix
+            self.A      = theano.shared(value=.5*np.diag(np.ones(xDim).astype(theano.config.floatX)), name='A'     ,borrow=True)     # dynamics matrix
 
         if 'QChol' in GenerativeParams:
             self.QChol  = theano.shared(value=GenerativeParams['QChol'].astype(theano.config.floatX), name='QChol' ,borrow=True)     # cholesky of innovation cov matrix
         else:
-            self.QChol  = theano.shared(value=np.random.randn(xDim, xDim).astype(theano.config.floatX), name='QChol' ,borrow=True)     # cholesky of innovation cov matrix
+            self.QChol  = theano.shared(value=(np.eye(xDim)).astype(theano.config.floatX), name='QChol' ,borrow=True)     # cholesky of innovation cov matrix
 
         if 'Q0Chol' in GenerativeParams:
             self.Q0Chol = theano.shared(value=GenerativeParams['Q0Chol'].astype(theano.config.floatX), name='Q0Chol',borrow=True)     # cholesky of starting distribution cov matrix
         else:
-            self.Q0Chol = theano.shared(value=np.random.randn(xDim, xDim).astype(theano.config.floatX), name='Q0Chol',borrow=True)     # cholesky of starting distribution cov matrix
+            self.Q0Chol = theano.shared(value=(np.eye(xDim)).astype(theano.config.floatX), name='Q0Chol',borrow=True)     # cholesky of starting distribution cov matrix
 
         if 'RChol' in GenerativeParams:
             self.RChol  = theano.shared(value=np.ndarray.flatten(GenerativeParams['RChol'].astype(theano.config.floatX)), name='RChol' ,borrow=True)     # cholesky of observation noise cov matrix
@@ -127,7 +127,7 @@ class LDS(GenerativeModel):
         if 'x0' in GenerativeParams:
             self.x0     = theano.shared(value=GenerativeParams['x0'].astype(theano.config.floatX), name='x0'    ,borrow=True)     # set to zero for stationary distribution
         else:
-            self.x0     = theano.shared(value=np.random.randn(xDim).astype(theano.config.floatX), name='x0'    ,borrow=True)     # set to zero for stationary distribution
+            self.x0     = theano.shared(value=np.zeros((xDim,)).astype(theano.config.floatX), name='x0'    ,borrow=True)     # set to zero for stationary distribution
 
         if 'NN_XtoY_Params' in GenerativeParams:
             self.NN_XtoY = GenerativeParams['NN_XtoY_Params']['network']
@@ -150,22 +150,19 @@ class LDS(GenerativeModel):
         # Call the neural network output a rate, basically to keep things consistent with the PLDS class
         self.rate = lasagne.layers.get_output(self.NN_XtoY, inputs = self.Xsamp)
 
-    def propagateLDS(self,Input_t,nsamp,X_tm1):
-        return  T.dot(X_tm1,self.A.T) + T.dot(nsamp,self.QChol.T) + Input_t
-
-    def sampleX(self,Input):
+    def sampleX(self, _N):
         _x0 = np.asarray(self.x0.eval(), dtype=theano.config.floatX)
         _Q0Chol = np.asarray(self.Q0Chol.eval(), dtype=theano.config.floatX)
         _QChol = np.asarray(self.QChol.eval(), dtype=theano.config.floatX)
         _A = np.asarray(self.A.eval(), dtype=theano.config.floatX)
 
-        norm_samp = np.random.randn(Input.shape[0], self.xDim).astype(theano.config.floatX)
-        x_vals = np.zeros([Input.shape[0], self.xDim]).astype(theano.config.floatX)
+        norm_samp = np.random.randn(_N, self.xDim).astype(theano.config.floatX)
+        x_vals = np.zeros([_N, self.xDim]).astype(theano.config.floatX)
 
-        x_vals[0] = _x0 + np.dot(norm_samp[0],_Q0Chol.T) + Input[0]
+        x_vals[0] = _x0 + np.dot(norm_samp[0],_Q0Chol.T)
 
-        for ii in xrange(Input.shape[0]-1):
-            x_vals[ii+1] = x_vals[ii].dot(_A.T) + norm_samp[ii+1].dot(_QChol.T) + Input[ii+1]
+        for ii in xrange(_N-1):
+            x_vals[ii+1] = x_vals[ii].dot(_A.T) + norm_samp[ii+1].dot(_QChol.T)
 
         return x_vals.astype(theano.config.floatX)
 
@@ -173,9 +170,9 @@ class LDS(GenerativeModel):
         ''' Return a symbolic sample from the generative model. '''
         return self.rate+T.dot(self.srng.normal([self.Xsamp.shape[0],self.yDim]),T.diag(self.RChol).T)
 
-    def sampleXY(self,Input):
+    def sampleXY(self, _N):
         ''' Return numpy samples from the generative model. '''
-        X = self.sampleX(Input)
+        X = self.sampleX(_N)
         nprand = np.random.randn(X.shape[0],self.yDim).astype(theano.config.floatX)
         _RChol = np.asarray(self.RChol.eval(), dtype=theano.config.floatX)
         Y = self.rate.eval({self.Xsamp: X}) + np.dot(nprand,np.diag(_RChol).T)
@@ -184,11 +181,11 @@ class LDS(GenerativeModel):
     def getParams(self):
         return [self.A] + [self.QChol] + [self.Q0Chol] + [self.RChol] + [self.x0] + lasagne.layers.get_all_params(self.NN_XtoY)
 
-    def evaluateLogDensity(self,Input,X,Y):
+    def evaluateLogDensity(self,X,Y):
         Ypred = theano.clone(self.rate,replace={self.Xsamp: X})
         resY  = Y-Ypred
-        resX  = X[1:]-T.dot(X[:(X.shape[0]-1)],self.A.T)-Input[1:]
-        resX0 = X[0]-self.x0-Input[0]
+        resX  = X[1:]-T.dot(X[:(X.shape[0]-1)],self.A.T)
+        resX0 = X[0]-self.x0
 
         LogDensity  = -(0.5*T.dot(resY.T,resY)*T.diag(self.Rinv)).sum() - (0.5*T.dot(resX.T,resX)*self.Lambda).sum() - 0.5*T.dot(T.dot(resX0,self.Lambda0),resX0.T)
         LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y.shape[0] + 0.5*T.log(Tla.det(self.Lambda))*(Y.shape[0]-1) + 0.5*T.log(Tla.det(self.Lambda0))  - 0.5*(self.xDim + self.yDim)*np.log(2*np.pi)*Y.shape[0]
@@ -224,19 +221,20 @@ class PLDS(LDS):
         ''' Return a symbolic sample from the generative model. '''
         return self.srng.poisson(lam = self.rate, size = self.rate.shape)
 
-    def sampleXY(self,Input):
+    def sampleXY(self,_N):
         ''' Return real-valued (numpy) samples from the generative model. '''
-        X = self.sampleX(Input)
+        X = self.sampleX(_N)
         Y = np.random.poisson(lam = self.rate.eval({self.Xsamp: X}))
         return [X,Y]
 
-    def evaluateLogDensity(self,Input,X,Y):
+    def evaluateLogDensity(self,X,Y):
         # This is the log density of the generative model (*not* negated)
         Ypred = theano.clone(self.rate,replace={self.Xsamp: X})
         resY  = Y-Ypred
-        resX  = X[1:]-T.dot(X[:-1],self.A.T)-Input[1:]
-        resX0 = X[0]-self.x0-Input[0]
-        LatentDensity = - 0.5*T.dot(T.dot(resX0,self.Lambda0),resX0.T) - (0.5*T.dot(resX.T, resX)*self.Lambda.T).sum() + 0.5*T.log(Tla.det(self.Lambda))*(Y.shape[0]-1) + 0.5*T.log(Tla.det(self.Lambda0)) - 0.5*(self.xDim)*np.log(2*np.pi)*Y.shape[0]
+        resX  = X[1:]-T.dot(X[:-1],self.A.T)
+        resX0 = X[0]-self.x0
+        LatentDensity = - 0.5*T.dot(T.dot(resX0,self.Lambda0),resX0.T) - 0.5*(resX*T.dot(resX,self.Lambda)).sum() + 0.5*T.log(Tla.det(self.Lambda))*(Y.shape[0]-1) + 0.5*T.log(Tla.det(self.Lambda0)) - 0.5*(self.xDim)*np.log(2*np.pi)*Y.shape[0]
+        #LatentDensity = - 0.5*T.dot(T.dot(resX0,self.Lambda0),resX0.T) - 0.5*(resX*T.dot(resX,self.Lambda)).sum() + 0.5*T.log(Tla.det(self.Lambda))*(Y.shape[0]-1) + 0.5*T.log(Tla.det(self.Lambda0)) - 0.5*(self.xDim)*np.log(2*np.pi)*Y.shape[0]
         PoisDensity = T.sum(Y * T.log(Ypred)  - Ypred - T.gammaln(Y + 1))
         LogDensity = LatentDensity + PoisDensity
         return LogDensity

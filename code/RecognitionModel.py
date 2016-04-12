@@ -45,14 +45,13 @@ class RecognitionModel(object):
     appropriate sampling expression.
     '''
 
-    def __init__(self,Input,indices,xDim,yDim,srng = None,nrng = None):
+    def __init__(self,Input,xDim,yDim,srng = None,nrng = None):
         self.srng = srng
         self.nrng = nrng
 
         self.xDim = xDim
         self.yDim = yDim
         self.Input = Input
-        self.indices = indices
 
     def evalEntropy(self):
         '''
@@ -101,7 +100,7 @@ class SmoothingLDSTimeSeries(RecognitionModel):
 
     '''
 
-    def __init__(self,RecognitionParams,Input,indices,xDim,yDim,srng = None,nrng = None):
+    def __init__(self,RecognitionParams,Input,xDim,yDim,srng = None,nrng = None):
         '''
         :parameters:
             - Input : 'y' theano.tensor.var.TensorVariable (n_input)
@@ -114,38 +113,19 @@ class SmoothingLDSTimeSeries(RecognitionModel):
             - xDim, yDim, zDim : (integers) dimension of
                 latent space (x), observation (y), and augumented var (z)
         '''
-        super(SmoothingLDSTimeSeries, self).__init__(Input,indices,xDim,yDim,srng,nrng)
+        super(SmoothingLDSTimeSeries, self).__init__(Input,xDim,yDim,srng,nrng)
 
-        if 'NN_Mu' in RecognitionParams and 'NN_Lambda' in RecognitionParams:
-            self.USE_NETWORKS = True
-            self.Tt = Input.shape[0]
-            # These variables allow us to control whether the network is deterministic or not (if we use Dropout)
-            self.mu_train = RecognitionParams['NN_Mu']['is_train']
-            self.lambda_train = RecognitionParams['NN_Lambda']['is_train']
+        self.Tt = Input.shape[0]
 
-            # This is the neural network that parameterizes the state mean, mu
-            self.NN_Mu = RecognitionParams['NN_Mu']['network']
-            # Mu will automatically be of size [T x xDim]
-            self.Mu = lasagne.layers.get_output(self.NN_Mu, inputs = self.Input)
+        # This is the neural network that parameterizes the state mean, mu
+        self.NN_Mu = RecognitionParams['NN_Mu']['network']
+        # Mu will automatically be of size [T x xDim]
+        self.Mu = lasagne.layers.get_output(self.NN_Mu, inputs = self.Input)
 
-            self.NN_Lambda = RecognitionParams['NN_Lambda']['network']
-            lambda_net_out = lasagne.layers.get_output(self.NN_Lambda, inputs=self.Input)
-            # Lambda will automatically be of size [T x xDim x xDim]
-            self.LambdaChol = T.reshape(lambda_net_out, [self.Tt, xDim, xDim]) + 1e-6*T.eye(xDim).astype(theano.config.floatX)
-
-        else:
-            self.USE_NETWORKS = False
-            self.Tt_full = RecognitionParams['Tt'] # the "total" length of the timeseries
-            self.Tt = self.indices.shape[0] # Minibatch size
-
-            # Mu will automatically be of size [T x xDim]
-            self.MuFull = theano.shared(value=np.random.randn(self.Tt_full, xDim).astype(theano.config.floatX),  name = 'Mu')
-            self.Mu = self.MuFull[self.indices]
-
-            # Lambda will automatically be of size [T x xDim x xDim]
-            self.LambdaCholFull = theano.shared(value=np.random.randn(self.Tt_full, xDim, xDim).astype(theano.config.floatX),  name = 'LambdaChol')
-
-            self.LambdaChol = self.LambdaCholFull[self.indices]
+        self.NN_Lambda = RecognitionParams['NN_Lambda']['network']
+        lambda_net_out = lasagne.layers.get_output(self.NN_Lambda, inputs=self.Input)
+        # Lambda will automatically be of size [T x xDim x xDim]
+        self.LambdaChol = T.reshape(lambda_net_out, [self.Tt, xDim, xDim]) #+ T.eye(self.xDim)
 
         self._initialize_posterior_distribution(RecognitionParams)
 
@@ -157,10 +137,10 @@ class SmoothingLDSTimeSeries(RecognitionModel):
         # dynamics matrix & initialize the innovations precision, xDim x xDim
         self.A         = theano.shared(value=RecognitionParams['A'].astype(theano.config.floatX)        ,name='A'        )
         self.QinvChol  = theano.shared(value=RecognitionParams['QinvChol'].astype(theano.config.floatX) ,name='QinvChol' )
-        self.Q0invChol = theano.shared(value=RecognitionParams['Q0invChol'].astype(theano.config.floatX),name='QinvChol')
+        self.Q0invChol = theano.shared(value=RecognitionParams['Q0invChol'].astype(theano.config.floatX),name='Q0invChol')
 
-        self.Qinv  = Tla.matrix_inverse(T.dot(self.QinvChol,self.QinvChol.T)) #+ 1e-6*T.diag(T.ones(self.xDim))
-        self.Q0inv = Tla.matrix_inverse(T.dot(self.Q0invChol,self.Q0invChol.T)) #+ 1e-6*T.diag(T.ones(self.xDim))
+        self.Qinv  = T.dot(self.QinvChol,self.QinvChol.T) 
+        self.Q0inv = T.dot(self.Q0invChol,self.Q0invChol.T)
 
         ################## put together the total precision matrix ######################
 
@@ -181,7 +161,7 @@ class SmoothingLDSTimeSeries(RecognitionModel):
         self.V, self.VV, self.S = compute_sym_blk_tridiag(self.AA, self.BB)
 
         # now compute the posterior mean
-        LambdaMu = T.batched_dot(self.Mu, self.Lambda) # scale by precision (no need for transpose; lambda is symmetric)
+        LambdaMu = T.batched_dot(self.Lambda, self.Mu) # scale by precision (no need for transpose; lambda is symmetric)
 
         #self.old_postX = compute_sym_blk_tridiag_inv_b(self.S,self.V,LambdaMu) # apply inverse
 
@@ -205,44 +185,19 @@ class SmoothingLDSTimeSeries(RecognitionModel):
     def evalEntropy(self): # we want it to be smooth, this is a prior on being smooth...
         return self.ln_determinant/2 + self.xDim*self.Tt/2.0*(1+np.log(2*np.pi))
 
+    def getDynParams(self):
+        return [self.A]+[self.QinvChol]+[self.Q0invChol]
+
     def getParams(self):
-        dyn_params = [self.A]+[self.QinvChol]+[self.Q0invChol]
-        if self.USE_NETWORKS:
-            network_params = lasagne.layers.get_all_params(self.NN_Mu) + lasagne.layers.get_all_params(self.NN_Lambda)
-            return dyn_params+network_params
-        else:
-            return dyn_params+[self.LambdaCholFull]+[self.MuFull]
+        return self.getDynParams() + lasagne.layers.get_all_params(self.NN_Mu) + lasagne.layers.get_all_params(self.NN_Lambda)
 
-    def setTrainingMode(self):
-        '''
-        changes the internal state so that `getSample` will possibly return
-        noisy samples for better generalization
-        '''
-        if self.USE_NETWORKS:
-            self.mu_train.set_value(1)
-            self.lambda_train.set_value(1)
-
-    def setTestMode(self):
-        '''
-        changes the internal state so that `getSample` will supress noise
-        (e.g., dropout) for prediction
-        '''
-        if self.USE_NETWORKS:
-            self.mu_train.set_value(0)
-            self.lambda_train.set_value(0)
 
     def get_summary(self, yy):
         out = {}
-        if self.USE_NETWORKS:
-            out['xsm'] = np.asarray(self.postX.eval({self.Input:yy}), dtype=theano.config.floatX)
-            out['Vsm'] = np.asarray(self.V.eval({self.Input:yy}), dtype=theano.config.floatX)
-            out['VVsm'] = np.asarray(self.VV.eval({self.Input:yy}), dtype=theano.config.floatX)
-            out['Mu'] = np.asarray(self.Mu.eval({self.Input:yy}), dtype=theano.config.floatX)
-        else:
-            out['xsm'] = np.asarray(self.postX.eval(), dtype=theano.config.floatX)
-            out['Vsm'] = np.asarray(self.V.eval(), dtype=theano.config.floatX)
-            out['VVsm'] = np.asarray(self.VV.eval(), dtype=theano.config.floatX)
-            out['Mu'] = np.asarray(self.Mu.eval(), dtype=theano.config.floatX)
+        out['xsm'] = np.asarray(self.postX.eval({self.Input:yy}), dtype=theano.config.floatX)
+        out['Vsm'] = np.asarray(self.V.eval({self.Input:yy}), dtype=theano.config.floatX)
+        out['VVsm'] = np.asarray(self.VV.eval({self.Input:yy}), dtype=theano.config.floatX)
+        out['Mu'] = np.asarray(self.Mu.eval({self.Input:yy}), dtype=theano.config.floatX)
         return out
 
 class SmoothingTimeSeries(RecognitionModel):
@@ -253,7 +208,7 @@ class SmoothingTimeSeries(RecognitionModel):
 
     '''
 
-    def __init__(self,RecognitionParams,Input,indices,xDim,yDim,srng = None,nrng = None):
+    def __init__(self,RecognitionParams,Input,xDim,yDim,srng = None,nrng = None):
         '''
         :parameters:
             - Input : 'y' theano.tensor.var.TensorVariable (n_input)
@@ -266,53 +221,27 @@ class SmoothingTimeSeries(RecognitionModel):
             - xDim, yDim, zDim : (integers) dimension of
                 latent space (x), observation (y), and augumented var (z)
         '''
-        super(SmoothingTimeSeries, self).__init__(Input,indices,xDim,yDim,srng,nrng)
+        super(SmoothingTimeSeries, self).__init__(Input,xDim,yDim,srng,nrng)
 
 #        print RecognitionParams
-        if 'NN_Mu' in RecognitionParams and 'NN_Lambda' in RecognitionParams:
-            self.USE_NETWORKS = True
-            self.Tt = Input.shape[0]
-            # These variables allow us to control whether the network is deterministic or not (if we use Dropout)
-            self.mu_train = RecognitionParams['NN_Mu']['is_train']
-            self.lambda_train = RecognitionParams['NN_Lambda']['is_train']
 
-            # This is the neural network that parameterizes the state mean, mu
-            self.NN_Mu = RecognitionParams['NN_Mu']['network']
-            # Mu will automatically be of size [T x xDim]
-            self.Mu = lasagne.layers.get_output(self.NN_Mu, inputs = self.Input)
+        self.Tt = Input.shape[0]
+        # These variables allow us to control whether the network is deterministic or not (if we use Dropout)
+        self.mu_train = RecognitionParams['NN_Mu']['is_train']
+        self.lambda_train = RecognitionParams['NN_Lambda']['is_train']
 
-            self.NN_Lambda = RecognitionParams['NN_Lambda']['network']
-            lambda_net_out = lasagne.layers.get_output(self.NN_Lambda, inputs=self.Input)
-            self.NN_LambdaX = RecognitionParams['NN_LambdaX']['network']
-            lambdaX_net_out = lasagne.layers.get_output(self.NN_LambdaX, inputs=T.concatenate([self.Input[:-1], self.Input[1:]], axis=1))
-            # Lambda will automatically be of size [T x xDim x xDim]
-            self.AAChol = T.reshape(lambda_net_out, [self.Tt, xDim, xDim]) + T.eye(xDim)
-            self.BBChol = T.reshape(lambdaX_net_out, [self.Tt-1, xDim, xDim]) #+ 1e-6*T.eye(xDim)
+        # This is the neural network that parameterizes the state mean, mu
+        self.NN_Mu = RecognitionParams['NN_Mu']['network']
+        # Mu will automatically be of size [T x xDim]
+        self.Mu = lasagne.layers.get_output(self.NN_Mu, inputs = self.Input)
 
-        else:
-            self.USE_NETWORKS = False
-            self.Tt_full = RecognitionParams['Tt'] # the "total" length of the timeseries
-            self.Tt = self.indices.shape[0] # Minibatch size
-
-            # Mu will automatically be of size [T x xDim]
-            self.MuFull = theano.shared(value=300*np.random.randn(self.Tt_full, xDim),  name = 'Mu')
-            self.Mu = self.MuFull[self.indices]
-
-            # Lambda will automatically be of size [T x xDim x xDim]
-            self.AACholFull = theano.shared(value=np.zeros([self.Tt_full, xDim, xDim]) + np.eye(self.xDim),  name = 'AA')
-            self.BBCholFull = theano.shared(value=np.zeros([self.Tt_full-1, xDim, xDim]),  name = 'BB')
-            self.AAChol = self.AACholFull[self.indices]
-            self.BBChol = self.BBCholFull[self.indices[:-1]]
-
-            ## Restrict our input covariance to be diagonal
-            # def makeChols(thing):
-            #     return T.diag(thing) + T.eye(xDim)
-            # self.Lambdachol = theano.scan(fn=makeChols,sequences=[lambda_net_out])[0]
-
-        ## Restrict our input covariance to be diagonal
-        # def makeChols(thing):
-        #     return T.diag(thing) + T.eye(xDim)
-        # self.Lambdachol = theano.scan(fn=makeChols,sequences=[lambda_net_out])[0]
+        self.NN_Lambda = RecognitionParams['NN_Lambda']['network']
+        lambda_net_out = lasagne.layers.get_output(self.NN_Lambda, inputs=self.Input)
+        self.NN_LambdaX = RecognitionParams['NN_LambdaX']['network']
+        lambdaX_net_out = lasagne.layers.get_output(self.NN_LambdaX, inputs=T.concatenate([self.Input[:-1], self.Input[1:]], axis=1))
+        # Lambda will automatically be of size [T x xDim x xDim]
+        self.AAChol = T.reshape(lambda_net_out, [self.Tt, xDim, xDim]) + T.eye(xDim)
+        self.BBChol = T.reshape(lambdaX_net_out, [self.Tt-1, xDim, xDim]) #+ 1e-6*T.eye(xDim)
 
         self._initialize_posterior_distribution(RecognitionParams)
 
@@ -348,42 +277,15 @@ class SmoothingTimeSeries(RecognitionModel):
         return self.ln_determinant/2 + self.xDim*self.Tt/2.0*(1+np.log(2*np.pi))
 
     def getParams(self):
-        if self.USE_NETWORKS:
-            return lasagne.layers.get_all_params(self.NN_Mu) + lasagne.layers.get_all_params(self.NN_Lambda) + lasagne.layers.get_all_params(self.NN_LambdaX)
-        else:
-            return [self.AACholFull]+[self.BBCholFull]+[self.MuFull]
+        return lasagne.layers.get_all_params(self.NN_Mu) + lasagne.layers.get_all_params(self.NN_Lambda) + lasagne.layers.get_all_params(self.NN_LambdaX)
 
-    def setTrainingMode(self):
-        '''
-        changes the internal state so that `getSample` will possibly return
-        noisy samples for better generalization
-        '''
-        if self.USE_NETWORKS:
-            self.mu_train.set_value(1)
-            self.lambda_train.set_value(1)
-
-    def setTestMode(self):
-        '''
-        changes the internal state so that `getSample` will supress noise
-        (e.g., dropout) for prediction
-        '''
-        if self.USE_NETWORKS:
-            self.mu_train.set_value(0)
-            self.lambda_train.set_value(0)
 
     def get_summary(self, yy):
         out = {}
-        if self.USE_NETWORKS:
-            out['xsm'] = np.asarray(self.postX.eval({self.Input:yy}), dtype=theano.config.floatX)
-            out['Vsm'] = np.asarray(self.V.eval({self.Input:yy}), dtype=theano.config.floatX)
-            out['VVsm'] = np.asarray(self.VV.eval({self.Input:yy}), dtype=theano.config.floatX)
-            out['Mu'] = np.asarray(self.Mu.eval({self.Input:yy}), dtype=theano.config.floatX)
-        else:
-            out['xsm'] = np.asarray(self.postX.eval(), dtype=theano.config.floatX)
-            out['Vsm'] = np.asarray(self.V.eval(), dtype=theano.config.floatX)
-            out['VVsm'] = np.asarray(self.VV.eval(), dtype=theano.config.floatX)
-            out['Mu'] = np.asarray(self.Mu.eval(), dtype=theano.config.floatX)
-        return out
+        out['xsm'] = np.asarray(self.postX.eval({self.Input:yy}), dtype=theano.config.floatX)
+        out['Vsm'] = np.asarray(self.V.eval({self.Input:yy}), dtype=theano.config.floatX)
+        out['VVsm'] = np.asarray(self.VV.eval({self.Input:yy}), dtype=theano.config.floatX)
+        out['Mu'] = np.asarray(self.Mu.eval({self.Input:yy}), dtype=theano.config.floatX)
 
 class MeanFieldGaussian(RecognitionModel):
     '''
@@ -397,7 +299,7 @@ class MeanFieldGaussian(RecognitionModel):
 
     '''
 
-    def __init__(self,RecognitionParams,Input,indices,xDim,yDim,srng = None,nrng = None):
+    def __init__(self,RecognitionParams,Input,xDim,yDim,srng = None,nrng = None):
         '''
         :parameters:
             - Input : 'y' theano.tensor.var.TensorVariable (n_input)
@@ -405,8 +307,7 @@ class MeanFieldGaussian(RecognitionModel):
             - xDim, yDim, zDim : (integers) dimension of
                 latent space (x), observation (y)
         '''
-        super(MeanFieldGaussian, self).__init__(Input,indices,xDim,yDim,srng,nrng)
-        self.USE_NETWORKS = True # haven't implemented non-network version yet
+        super(MeanFieldGaussian, self).__init__(Input,xDim,yDim,srng,nrng)
         self.Tt = Input.shape[0]
         self.mu_train = RecognitionParams['NN_Mu']['is_train']
         self.NN_Mu = RecognitionParams['NN_Mu']['network']
@@ -437,32 +338,10 @@ class MeanFieldGaussian(RecognitionModel):
         retSamp  = theano.scan(fn=SampOneStep,sequences=[self.LambdaChol, normSamps])[0]
         return retSamp+self.postX
 
-    def setTrainingMode(self):
-        '''
-        changes the internal state so that `getSample` will possibly return
-        noisy samples for better generalization
-        '''
-        self.mu_train.set_value(1)
-        self.lambda_train.set_value(1)
-
-    def setTestMode(self):
-        '''
-        changes the internal state so that `getSample` will supress noise
-        (e.g., dropout) for prediction
-        '''
-        self.mu_train.set_value(0)
-        self.lambda_train.set_value(0)
-
     def get_summary(self, yy):
         out = {}
-        if self.USE_NETWORKS:
-            out['xsm'] = numpy.asarray(self.postX.eval({self.Input:yy}), dtype=theano.config.floatX)
-            V = T.batched_dot(self.LambdaChol, self.LambdaChol.dimshuffle(0,2,1))
-            out['Vsm'] = numpy.asarray(V.eval({self.Input:yy}), dtype=theano.config.floatX)
-            out['VVsm'] = np.zeros([yy.shape[0]-1, self.xDim, self.xDim]).astype(theano.config.floatX)
-        else:
-            out['xsm'] = numpy.asarray(self.postX.eval(), dtype=theano.config.floatX)
-            V = T.batched_dot(self.LambdaChol, self.LambdaChol.dimshuffle(0,2,1))
-            out['Vsm'] = numpy.asarray(V.eval(), dtype=theano.config.floatX)
-            out['VVsm'] = np.zeros([yy.shape[0]-1, self.xDim, self.xDim]).astype(theano.config.floatX)
+        out['xsm'] = numpy.asarray(self.postX.eval({self.Input:yy}), dtype=theano.config.floatX)
+        V = T.batched_dot(self.LambdaChol, self.LambdaChol.dimshuffle(0,2,1))
+        out['Vsm'] = numpy.asarray(V.eval({self.Input:yy}), dtype=theano.config.floatX)
+        out['VVsm'] = np.zeros([yy.shape[0]-1, self.xDim, self.xDim]).astype(theano.config.floatX)
         return out
