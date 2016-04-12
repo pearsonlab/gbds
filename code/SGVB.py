@@ -107,12 +107,14 @@ class SGVB():#(Trainable):
         '''
         self.isTrainingRecognitionModel = True;
         self.mrec.setTrainingMode()
+
     def DisableRecognitionModelTraining(self):
         '''
         Disable training of RecognitionModel parameters.
         '''
         self.isTrainingRecognitionModel = False;
         self.mrec.setTestMode()
+
     def EnableGenerativeModelTraining(self):
         '''
         Enable training of GenerativeModel parameters.

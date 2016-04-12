@@ -111,7 +111,7 @@ class SmoothingLDSTimeSeries(RecognitionModel):
                      * NN paramers...
                      * others... TODO
             - xDim, yDim, zDim : (integers) dimension of
-                latent space (x), observation (y), and augumented var (z)
+                latent space (x) and observation (y)
         '''
         super(SmoothingLDSTimeSeries, self).__init__(Input,xDim,yDim,srng,nrng)
 
@@ -139,7 +139,7 @@ class SmoothingLDSTimeSeries(RecognitionModel):
         self.QinvChol  = theano.shared(value=RecognitionParams['QinvChol'].astype(theano.config.floatX) ,name='QinvChol' )
         self.Q0invChol = theano.shared(value=RecognitionParams['Q0invChol'].astype(theano.config.floatX),name='Q0invChol')
 
-        self.Qinv  = T.dot(self.QinvChol,self.QinvChol.T) 
+        self.Qinv  = T.dot(self.QinvChol,self.QinvChol.T)
         self.Q0inv = T.dot(self.Q0invChol,self.Q0invChol.T)
 
         ################## put together the total precision matrix ######################
@@ -219,7 +219,7 @@ class SmoothingTimeSeries(RecognitionModel):
                      * NN paramers...
                      * others... TODO
             - xDim, yDim, zDim : (integers) dimension of
-                latent space (x), observation (y), and augumented var (z)
+                latent space (x) and observation (y)
         '''
         super(SmoothingTimeSeries, self).__init__(Input,xDim,yDim,srng,nrng)
 
@@ -278,7 +278,6 @@ class SmoothingTimeSeries(RecognitionModel):
 
     def getParams(self):
         return lasagne.layers.get_all_params(self.NN_Mu) + lasagne.layers.get_all_params(self.NN_Lambda) + lasagne.layers.get_all_params(self.NN_LambdaX)
-
 
     def get_summary(self, yy):
         out = {}
