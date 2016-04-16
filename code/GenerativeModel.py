@@ -225,7 +225,7 @@ class PLDS(LDS):
         ''' Return real-valued (numpy) samples from the generative model. '''
         X = self.sampleX(_N)
         Y = np.random.poisson(lam = self.rate.eval({self.Xsamp: X}))
-        return [X,Y]
+        return [X.astype(theano.config.floatX),Y.astype(theano.config.floatX)]
 
     def evaluateLogDensity(self,X,Y):
         # This is the log density of the generative model (*not* negated)
