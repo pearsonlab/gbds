@@ -192,6 +192,72 @@ class LDS(GenerativeModel):
 
         return LogDensity
 
+
+class RLDS(LDS):
+    '''
+    LDS with previous timestep recurrence
+
+    x(0) ~ N(x0, Q0 * Q0')
+    x(t) ~ N(A x(t-1), Q * Q')
+    y(t) ~ N(NN(x(t), y(t-1)), R * R')
+    '''
+    def __init__(self, GenerativeParams, xDim, yDim, srng = None, nrng = None):
+        super(RLDS, self).__init__(GenerativeParams,xDim,yDim,srng,nrng)
+
+        self.Xsamp_Yprev = T.matrix('Xsamp_Yprev')
+
+        if 'NN_XYprevtoY_Params' in GenerativeParams:
+            self.NN_XYprevtoY = GenerativeParams['NN_XYprevtoY_Params']['network']
+        else:
+            # Define a neural network that maps the latent state and previous observation into the output
+            gen_nn = lasagne.layers.InputLayer((None, xDim+yDim))
+            self.NN_XYprevtoY = lasagne.layers.DenseLayer(gen_nn, yDim, nonlinearity=lasagne.nonlinearities.linear, W=lasagne.init.Orthogonal())
+        if 'y0' in GenerativeParams:
+            self.y0 = theano.shared(value=GenerativeParams['y0'].astype(theano.config.floatX), name='y0', borrow=True)
+        else:
+            self.y0 = theano.shared(value=np.zeros((xDim + yDim,)).astype(theano.config.floatX), name='y0', borrow=True)
+
+        self.rate = lasagne.layers.get_output(self.NN_XYprevtoY, inputs = self.Xsamp_Yprev)
+
+
+    def sampleXY(self, _N):
+        ''' Return numpy samples from the generative model. '''
+        X = self.sampleX(_N)
+        nprand = np.random.randn(X.shape[0],self.yDim).astype(theano.config.floatX)
+        _RChol = np.asarray(self.RChol.eval(), dtype=theano.config.floatX)
+        _X = X.eval()
+
+        Y = [self.y0.eval()]
+        next_Y = lambda prev_Y, X: self.rate.eval({self.Xsamp_Yprev: T.concatenate([X, prev_Y], axis=1)})
+        for i in range(_X.shape[0]):
+            Y.append(next_Y(Y[-1], _X[i, :]) + np.dot(nprand,np.diag(_RChol).T))
+        
+        Y = np.array(Y)
+
+        return [X,Y]
+
+    def getParams(self):
+        return [self.A] + [self.QChol] + [self.Q0Chol] + [self.RChol] + [self.x0] + lasagne.layers.get_all_params(self.NN_XYprevtoY)
+
+    def evaluateLogDensity(self,X,Y):
+        '''
+        Ignores first observation in Y since you need a previous obs (should this be changed later?)
+        '''
+        lag_Y = Y[:-1, :]
+        Y = Y[1:, :]
+        X = X[1:, :]
+        XYprev = T.concatenate([X, lag_Y], axis=1)
+        Ypred = theano.clone(self.rate,replace={self.Xsamp_Yprev: XYprev})
+        resY  = Y-Ypred
+        resX  = X[1:]-T.dot(X[:(X.shape[0]-1)],self.A.T)
+        resX0 = X[0]-self.x0
+
+        LogDensity  = -(0.5*T.dot(resY.T,resY)*T.diag(self.Rinv)).sum() - (0.5*T.dot(resX.T,resX)*self.Lambda).sum() - 0.5*T.dot(T.dot(resX0,self.Lambda0),resX0.T)
+        LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y.shape[0] + 0.5*T.log(Tla.det(self.Lambda))*(Y.shape[0]-1) + 0.5*T.log(Tla.det(self.Lambda0))  - 0.5*(self.xDim + self.yDim)*np.log(2*np.pi)*Y.shape[0]
+
+        return LogDensity
+
+
 class PLDS(LDS):
     '''
     Gaussian linear dynamical system with Poisson count observations. Inherits Gaussian
