@@ -217,6 +217,11 @@ class RLDS(LDS):
         else:
             self.y0 = theano.shared(value=np.zeros((xDim + yDim,)).astype(theano.config.floatX), name='y0', borrow=True)
 
+        if 'reg' in GenerativeParams:
+            self.reg = theano.shared(value=np.cast[theano.config.floatX](GenerativeParams['reg']), name='reg', borrow=True)
+        else:
+            self.reg = None
+
         self.rate = lasagne.layers.get_output(self.NN_XYprevtoY, inputs = self.Xsamp_Yprev)
 
 
@@ -225,7 +230,6 @@ class RLDS(LDS):
         X = self.sampleX(_N)
         nprand = np.random.randn(X.shape[0],self.yDim).astype(theano.config.floatX)
         _RChol = np.asarray(self.RChol.eval(), dtype=theano.config.floatX)
-        _X = X.eval()
 
         Y = [self.y0.eval()]
         next_Y = lambda prev_Y, X: self.rate.eval({self.Xsamp_Yprev: T.concatenate([X, prev_Y], axis=1)})
@@ -253,6 +257,8 @@ class RLDS(LDS):
         resX0 = X[0]-self.x0
 
         LogDensity  = -(0.5*T.dot(resY.T,resY)*T.diag(self.Rinv)).sum() - (0.5*T.dot(resX.T,resX)*self.Lambda).sum() - 0.5*T.dot(T.dot(resX0,self.Lambda0),resX0.T)
+        if self.reg is not None:
+            LogDensity -= self.reg * T.abs_(self.NN_XYprevtoY.W[:self.xDim, :]).sum()  # add weight regularization to latent->obs mapping
         LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y.shape[0] + 0.5*T.log(Tla.det(self.Lambda))*(Y.shape[0]-1) + 0.5*T.log(Tla.det(self.Lambda0))  - 0.5*(self.xDim + self.yDim)*np.log(2*np.pi)*Y.shape[0]
 
         return LogDensity
