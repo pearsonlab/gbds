@@ -72,7 +72,8 @@ class SGVB_PK():#(Trainable):
                  yCols_goalie=(0, 3, 6),  # columns holding goalie observations
                  xCols_goalie=(0,),  # columns holding goalie latents
                  yCols_ball=(1, 2, 4, 5, 7, 8),  # columns holding ball observations
-                 xCols_ball=(1,)  # columns holding ball latents
+                 xCols_ball=(1,),  # columns holding ball latents
+                 feed_external=False  # feed external observations to each gen model
                  ):
 
         # instantiate rng's
@@ -97,15 +98,25 @@ class SGVB_PK():#(Trainable):
         self.yCols_ball = yCols_ball
         self.xCols_ball = xCols_ball
 
+        self.feed_external = feed_external
+
         # instantiate our prior & recognition models
         self.mrec = REC_MODEL(rec_params, self.Y, self.xDim,
                               self.yDim, self.srng, self.nrng)
-        self.mprior_ball = GEN_MODEL_ball(gen_params_ball, self.xDim_ball,
-                                          self.yDim_ball, srng=self.srng,
-                                          nrng=self.nrng)
-        self.mprior_goalie = GEN_MODEL_goalie(gen_params_goalie, self.xDim_goalie,
-                                              self.yDim_goalie, srng=self.srng,
+        if self.feed_external:
+            self.mprior_ball = GEN_MODEL_ball(gen_params_ball, self.xDim_ball,
+                                              self.yDim_ball, srng=self.srng,
+                                              nrng=self.nrng, y_extDim=self.yDim_goalie)
+            self.mprior_goalie = GEN_MODEL_goalie(gen_params_goalie, self.xDim_goalie,
+                                                  self.yDim_goalie, srng=self.srng,
+                                                  nrng=self.nrng, y_extDim=self.yDim_ball)
+        else:
+            self.mprior_ball = GEN_MODEL_ball(gen_params_ball, self.xDim_ball,
+                                              self.yDim_ball, srng=self.srng,
                                               nrng=self.nrng)
+            self.mprior_goalie = GEN_MODEL_goalie(gen_params_goalie, self.xDim_goalie,
+                                                  self.yDim_goalie, srng=self.srng,
+                                                  nrng=self.nrng)
 
         self.isTrainingRecognitionModel = True
         self.isTrainingGenerativeModel = True
@@ -156,10 +167,19 @@ class SGVB_PK():#(Trainable):
         q = self.mrec.getSample()
 
         theentropy = self.mrec.evalEntropy()
-        thelik = self.mprior_goalie.evaluateLogDensity(q[:, self.xCols_goalie].reshape((-1, self.xDim_goalie)),
-                                                       self.Y[:, self.yCols_goalie])
-        thelik += self.mprior_ball.evaluateLogDensity(q[:, self.xCols_ball].reshape((-1, self.xDim_ball)),
-                                                      self.Y[:, self.yCols_ball])
+
+        if self.feed_external:
+            thelik = self.mprior_goalie.evaluateLogDensity(q[:, self.xCols_goalie].reshape((-1, self.xDim_goalie)),
+                                                           self.Y[:, self.yCols_goalie],
+                                                           Y_ext=self.Y[:, self.yCols_ball])
+            thelik += self.mprior_ball.evaluateLogDensity(q[:, self.xCols_ball].reshape((-1, self.xDim_ball)),
+                                                          self.Y[:, self.yCols_ball],
+                                                          Y_ext=self.Y[:, self.yCols_goalie])
+        else:
+            thelik = self.mprior_goalie.evaluateLogDensity(q[:, self.xCols_goalie].reshape((-1, self.xDim_goalie)),
+                                                           self.Y[:, self.yCols_goalie])
+            thelik += self.mprior_ball.evaluateLogDensity(q[:, self.xCols_ball].reshape((-1, self.xDim_ball)),
+                                                          self.Y[:, self.yCols_ball])
 
         thecost = thelik + theentropy
 
