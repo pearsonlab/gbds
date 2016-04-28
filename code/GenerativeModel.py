@@ -193,6 +193,105 @@ class LDS(GenerativeModel):
         return LogDensity
 
 
+class LRLDS(LDS):
+    '''
+    LDS with previous timestep recurrence in observations (optionally including
+    external observations) and latents
+
+    x(0) ~ N(x0, Q0 * Q0')
+    x(t) ~ N(A x(t-1) + B y(t-1) + C y_ext(t-1), Q * Q')
+    y(t) ~ N(NN(x(t), y(t-1)), R * R')
+
+    Gamma is a vector that holds a multiplier for each latent. We penalize this to
+    ensure that information isn't diluted to many latents.
+
+    Constrain latents to unit variance the following term in the ELBO:
+    -theta * (var(z) - 1)**2
+    '''
+    def __init__(self, GenerativeParams, xDim, yDim, y_extDim=None, srng = None, nrng = None):
+        super(LRLDS, self).__init__(GenerativeParams,xDim,yDim,srng,nrng)
+
+        self.Xsamp_Yprev = T.matrix('Xsamp_Yprev')
+
+        if 'NN_XYprevtoY_Params' in GenerativeParams:
+            self.NN_XYprevtoY = GenerativeParams['NN_XYprevtoY_Params']['network']
+        else:
+            # Define a neural network that maps the latent state and previous observation into the output
+            gen_nn = lasagne.layers.InputLayer((None, xDim+yDim))
+            self.NN_XYprevtoY = lasagne.layers.DenseLayer(gen_nn, yDim, nonlinearity=lasagne.nonlinearities.linear, W=lasagne.init.Orthogonal())
+        if 'y0' in GenerativeParams:
+            self.y0 = theano.shared(value=GenerativeParams['y0'].astype(theano.config.floatX), name='y0', borrow=True)
+        else:
+            self.y0 = theano.shared(value=np.zeros((xDim + yDim,)).astype(theano.config.floatX), name='y0', borrow=True)
+
+        if 'reg' in GenerativeParams:
+            self.reg = theano.shared(value=np.cast[theano.config.floatX](GenerativeParams['reg']), name='reg', borrow=True)
+        else:
+            self.reg = None
+        if 'B' in GenerativeParams:
+            self.B = theano.shared(value=GenerativeParams['B'].astype(theano.config.floatX), name='B', borrow=True)
+        else:
+            self.B = theano.shared(value=np.zeros((yDim, xDim)).astype(theano.config.floatX), name='B', borrow=True)
+        if y_extDim is not None:
+            self.C = theano.shared(value=np.zeros((y_extDim, xDim)).astype(theano.config.floatX), name='C', borrow=True)
+        else:
+            self.C = None
+
+        if 'gamma' in GenerativeParams:
+            self.gamma = theano.shared(value=GenerativeParams['gamma'].astype(theano.config.floatX), name='gamma', borrow=True)
+        else:
+            self.gamma = theano.shared(value=np.ones((xDim)).astype(theano.config.floatX), name='gamma', borrow=True)
+        if 'lmda' in GenerativeParams:
+            self.lmda = theano.shared(value=np.cast[theano.config.floatX](GenerativeParams['lmda']), name='lmda', borrow=True)
+        else:
+            self.lmda = theano.shared(value=np.cast[theano.config.floatX](0.05), name='lmda', borrow=True)
+
+        if 'theta' in GenerativeParams:
+            self.theta = theano.shared(value=np.cast[theano.config.floatX](GenerativeParams['theta']), name='theta', borrow=True)
+        else:
+            self.theta = theano.shared(value=np.cast[theano.config.floatX](10.0), name='theta', borrow=True)
+
+        self.rate = lasagne.layers.get_output(self.NN_XYprevtoY, inputs = self.Xsamp_Yprev)
+
+    def sampleX(self, _N):
+        # how do you sample X when it relies on observations? Evaluate rate and feed it back in?
+        raise NotImplementedError()
+
+    def getParams(self):
+        rets = [self.gamma] + [self.A] + [self.B] + [self.QChol] + [self.Q0Chol] + [self.RChol] + [self.x0] + lasagne.layers.get_all_params(self.NN_XYprevtoY)
+        if self.C is not None:
+            rets += [self.C]
+        return rets
+
+    def evaluateLogDensity(self, X, Y, Y_ext=None):
+        '''
+        Ignores first observation in Y since you need a previous obs (should this be changed later?)
+        '''
+        X = X * self.gamma
+        lag_Y = Y[:-1, :]
+        lag_Y_ext = Y_ext[:-1, :]
+        curr_Y = Y[1:, :]
+        curr_X = X[1:, :]
+        XYprev = T.concatenate([curr_X, lag_Y], axis=1)
+        Ypred = theano.clone(self.rate,replace={self.Xsamp_Yprev: XYprev})
+        resY  = curr_Y-Ypred
+        if self.C is not None and Y_ext is not None:
+            resX = curr_X - (T.dot(X[:-1], self.A) + T.dot(lag_Y, self.B) + T.dot(lag_Y_ext, self.C))
+        else:
+            resX = curr_X - (T.dot(X[:-1], self.A) + T.dot(lag_Y, self.B))
+        resX0 = X[0]-self.x0
+
+        LogDensity  = -(0.5*T.dot(resY.T,resY)*T.diag(self.Rinv)).sum() - (0.5*T.dot(resX.T,resX)*self.Lambda).sum() - 0.5*T.dot(T.dot(resX0,self.Lambda0),resX0.T)
+        if self.reg is not None:
+            LogDensity -= self.reg * T.abs_(self.NN_XYprevtoY.W[:self.xDim, :]).sum()  # add weight regularization to latent->obs mapping
+        LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y.shape[0] + 0.5*T.log(Tla.det(self.Lambda))*(Y.shape[0]-1) + 0.5*T.log(Tla.det(self.Lambda0))  - 0.5*(self.xDim + self.yDim)*np.log(2*np.pi)*Y.shape[0]
+
+        LogDensity -= self.lmda * np.abs(self.gamma).sum()
+        LogDensity -= self.theta * ((X.var(axis=0) - 1)**2).sum()
+
+        return LogDensity
+
+
 class RLDS(LDS):
     '''
     LDS with previous timestep recurrence
@@ -217,6 +316,11 @@ class RLDS(LDS):
         else:
             self.y0 = theano.shared(value=np.zeros((xDim + yDim,)).astype(theano.config.floatX), name='y0', borrow=True)
 
+        if 'reg' in GenerativeParams:
+            self.reg = theano.shared(value=np.cast[theano.config.floatX](GenerativeParams['reg']), name='reg', borrow=True)
+        else:
+            self.reg = None
+
         self.rate = lasagne.layers.get_output(self.NN_XYprevtoY, inputs = self.Xsamp_Yprev)
 
 
@@ -225,7 +329,6 @@ class RLDS(LDS):
         X = self.sampleX(_N)
         nprand = np.random.randn(X.shape[0],self.yDim).astype(theano.config.floatX)
         _RChol = np.asarray(self.RChol.eval(), dtype=theano.config.floatX)
-        _X = X.eval()
 
         Y = [self.y0.eval()]
         next_Y = lambda prev_Y, X: self.rate.eval({self.Xsamp_Yprev: T.concatenate([X, prev_Y], axis=1)})
@@ -253,6 +356,8 @@ class RLDS(LDS):
         resX0 = X[0]-self.x0
 
         LogDensity  = -(0.5*T.dot(resY.T,resY)*T.diag(self.Rinv)).sum() - (0.5*T.dot(resX.T,resX)*self.Lambda).sum() - 0.5*T.dot(T.dot(resX0,self.Lambda0),resX0.T)
+        if self.reg is not None:
+            LogDensity -= self.reg * T.abs_(self.NN_XYprevtoY.W[:self.xDim, :]).sum()  # add weight regularization to latent->obs mapping
         LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y.shape[0] + 0.5*T.log(Tla.det(self.Lambda))*(Y.shape[0]-1) + 0.5*T.log(Tla.det(self.Lambda0))  - 0.5*(self.xDim + self.yDim)*np.log(2*np.pi)*Y.shape[0]
 
         return LogDensity
