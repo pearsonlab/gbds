@@ -199,8 +199,8 @@ class LRLDS(LDS):
     external observations) and latents
 
     x(0) ~ N(x0, Q0 * Q0')
-    x(t) ~ N(A x(t-1) + CNN(y(t-1)) + CNN(y_ext(t-1)), Q * Q')
-    y(t) ~ N(NN(x(t)) + CNN(y(t-1)), R * R')
+    x(t) ~ N(A x(t-1) + CNN(y(t-f->t-1)) + CNN(y_ext(t-f->t-1)), Q * Q')
+    y(t) ~ N(NN(x(t)) + CNN(y(t-f->t-1)), R * R')
 
     Gamma is a vector that holds a multiplier for each latent. We penalize this to
     ensure that information isn't diluted to many latents.
