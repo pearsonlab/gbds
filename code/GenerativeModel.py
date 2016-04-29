@@ -237,19 +237,16 @@ class LRLDS(LDS):
         else:
             self.C = None
 
-        if 'gamma' in GenerativeParams:
-            self.gamma = theano.shared(value=GenerativeParams['gamma'].astype(theano.config.floatX), name='gamma', borrow=True)
-        else:
-            self.gamma = theano.shared(value=np.ones((xDim)).astype(theano.config.floatX), name='gamma', borrow=True)
+        self.gamma = theano.shared(value=np.ones((xDim)).astype(theano.config.floatX), name='gamma', borrow=True)
         if 'lmda' in GenerativeParams:
             self.lmda = theano.shared(value=np.cast[theano.config.floatX](GenerativeParams['lmda']), name='lmda', borrow=True)
         else:
-            self.lmda = theano.shared(value=np.cast[theano.config.floatX](0.05), name='lmda', borrow=True)
+            self.lmda = None
 
         if 'theta' in GenerativeParams:
             self.theta = theano.shared(value=np.cast[theano.config.floatX](GenerativeParams['theta']), name='theta', borrow=True)
         else:
-            self.theta = theano.shared(value=np.cast[theano.config.floatX](10.0), name='theta', borrow=True)
+            self.theta = None
 
         self.rate = lasagne.layers.get_output(self.NN_XYprevtoY, inputs = self.Xsamp_Yprev)
 
@@ -258,9 +255,11 @@ class LRLDS(LDS):
         raise NotImplementedError()
 
     def getParams(self):
-        rets = [self.gamma] + [self.A] + [self.B] + [self.QChol] + [self.Q0Chol] + [self.RChol] + [self.x0] + lasagne.layers.get_all_params(self.NN_XYprevtoY)
+        rets = [self.A] + [self.B] + [self.QChol] + [self.Q0Chol] + [self.RChol] + [self.x0] + lasagne.layers.get_all_params(self.NN_XYprevtoY)
         if self.C is not None:
             rets += [self.C]
+        if self.lmda is not None and self.theta is not None:
+            rets += [self.gamma]
         return rets
 
     def evaluateLogDensity(self, X, Y, Y_ext=None):
@@ -286,8 +285,9 @@ class LRLDS(LDS):
             LogDensity -= self.reg * T.abs_(self.NN_XYprevtoY.W[:self.xDim, :]).sum()  # add weight regularization to latent->obs mapping
         LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y.shape[0] + 0.5*T.log(Tla.det(self.Lambda))*(Y.shape[0]-1) + 0.5*T.log(Tla.det(self.Lambda0))  - 0.5*(self.xDim + self.yDim)*np.log(2*np.pi)*Y.shape[0]
 
-        LogDensity -= self.lmda * np.abs(self.gamma).sum()
-        LogDensity -= self.theta * ((X.var(axis=0) - 1)**2).sum()
+        if self.lmda is not None and self.theta is not None:
+            LogDensity -= self.lmda * np.abs(self.gamma).sum()
+            LogDensity -= self.theta * ((X.var(axis=0) - 1)**2).sum()
 
         return LogDensity
 
