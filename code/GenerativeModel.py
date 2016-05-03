@@ -322,7 +322,9 @@ class LRLDS(LDS):
 
         LogDensity = -(0.5*T.dot(resY.T,resY)*T.diag(self.Rinv)).sum() - (0.5*T.dot(resX.T,resX)*self.Lambda).sum() - 0.5*T.dot(T.dot(resX0,self.Lambda0),resX0.T)
         if self.reg is not None:
-            LogDensity -= self.reg * T.abs_(self.NN_XtoY.W[:self.xDim, :]).sum()  # add weight regularization to latent->obs mapping
+            K, _ = lasagne.layers.get_all_params(self.CNN_YtoU)
+            Kp, _ = lasagne.layers.get_all_params(self.CNN_YexttoU)
+            LogDensity -= self.reg * (T.abs_(K).sum() + T.abs_(Kp).sum())  # add regularization to filters
         LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y.shape[0] + 0.5*T.log(Tla.det(self.Lambda))*(Y.shape[0]-1) + 0.5*T.log(Tla.det(self.Lambda0))  - 0.5*(self.xDim + self.yDim)*np.log(2*np.pi)*Y.shape[0]
 
         if self.lmda is not None and self.theta is not None:
