@@ -193,24 +193,21 @@ class LDS(GenerativeModel):
         return LogDensity
 
 
-class LRLDS(LDS):
+class FLDS(LDS):
     '''
-    LDS with previous timestep recurrence in observations (optionally including
-    external observations) and latents
-
     x(0) ~ N(x0, Q0 * Q0')
     x(t) ~ N(A x(t-1) + B u(t-1), Q * Q')
     y(t) ~ N(NN(x(t)) + D u(t-1), R * R')
-    u(t) ~ K y(t) - convolution
+    u(t) ~ K * y(t) - convolution
 
     Gamma is a vector that holds a multiplier for each latent. We penalize this to
-    ensure that information isn't diluted to many latents.
+    ensure that information isn't diluted to many latents by enabling lmda and theta.
 
     Constrain latents to unit variance the following term in the ELBO:
     -theta * (var(z) - 1)**2
     '''
     def __init__(self, GenerativeParams, xDim, yDim, y_extDim=None, srng = None, nrng = None):
-        super(LRLDS, self).__init__(GenerativeParams,xDim,yDim,srng,nrng)
+        super(FLDS, self).__init__(GenerativeParams,xDim,yDim,srng,nrng)
 
         if 'y0' in GenerativeParams:
             self.y0 = theano.shared(value=GenerativeParams['y0'].astype(theano.config.floatX), name='y0', borrow=True)
@@ -334,73 +331,89 @@ class LRLDS(LDS):
         return LogDensity
 
 
-class RLDS(LDS):
+class SFLDS():
     '''
-    LDS with previous timestep recurrence
-
-    x(0) ~ N(x0, Q0 * Q0')
-    x(t) ~ N(A x(t-1), Q * Q')
-    y(t) ~ N(NN(x(t), y(t-1)), R * R')
+    y(t) ~ N(D u(t-1), R * R')
+    u(t) ~ K y(t) - convolution
     '''
-    def __init__(self, GenerativeParams, xDim, yDim, srng = None, nrng = None):
-        super(RLDS, self).__init__(GenerativeParams,xDim,yDim,srng,nrng)
-
-        self.Xsamp_Yprev = T.matrix('Xsamp_Yprev')
-
-        if 'NN_XYprevtoY_Params' in GenerativeParams:
-            self.NN_XYprevtoY = GenerativeParams['NN_XYprevtoY_Params']['network']
+    def __init__(self, GenerativeParams, yDim, y_extDim=None, srng = None, nrng = None):
+        if 'RChol' in GenerativeParams:
+            self.RChol  = theano.shared(value=np.ndarray.flatten(GenerativeParams['RChol'].astype(theano.config.floatX)), name='RChol' ,borrow=True)     # cholesky of observation noise cov matrix
         else:
-            # Define a neural network that maps the latent state and previous observation into the output
-            gen_nn = lasagne.layers.InputLayer((None, xDim+yDim))
-            self.NN_XYprevtoY = lasagne.layers.DenseLayer(gen_nn, yDim, nonlinearity=lasagne.nonlinearities.linear, W=lasagne.init.Orthogonal())
+            self.RChol  = theano.shared(value=np.random.randn(yDim).astype(theano.config.floatX)/10, name='RChol' ,borrow=True)     # cholesky of observation noise cov matrix
+
         if 'y0' in GenerativeParams:
             self.y0 = theano.shared(value=GenerativeParams['y0'].astype(theano.config.floatX), name='y0', borrow=True)
         else:
-            self.y0 = theano.shared(value=np.zeros((xDim + yDim,)).astype(theano.config.floatX), name='y0', borrow=True)
+            self.y0 = theano.shared(value=np.zeros((yDim,)).astype(theano.config.floatX), name='y0', borrow=True)
 
         if 'reg' in GenerativeParams:
             self.reg = theano.shared(value=np.cast[theano.config.floatX](GenerativeParams['reg']), name='reg', borrow=True)
         else:
             self.reg = None
 
-        self.rate = lasagne.layers.get_output(self.NN_XYprevtoY, inputs = self.Xsamp_Yprev)
+        if 'filter_size' in GenerativeParams:
+            filter_size = GenerativeParams['filter_size']
+        else:
+            filter_size = 5
 
+        self.Rinv = 1./(self.RChol**2) #Tla.matrix_inverse(T.dot(self.RChol ,T.transpose(self.RChol)))
 
-    def sampleXY(self, _N):
-        ''' Return numpy samples from the generative model. '''
-        X = self.sampleX(_N)
-        nprand = np.random.randn(X.shape[0],self.yDim).astype(theano.config.floatX)
-        _RChol = np.asarray(self.RChol.eval(), dtype=theano.config.floatX)
+        if 'CNN_YtoU_Params' in GenerativeParams:
+            self.CNN_YtoU = GenerativeParams['CNN_YtoU_Params']['network']
+        else:
+            gen_nn = lasagne.layers.InputLayer((yDim, None))
+            gen_nn = lasagne.layers.ReshapeLayer(gen_nn, (1, 1, yDim, [1]))
+            gen_nn = lasagne.layers.Conv2DLayer(gen_nn, yDim, (yDim, filter_size),
+                                                nonlinearity=lasagne.nonlinearities.linear,
+                                                pad=(0, filter_size))
+            self.CNN_YtoU = lasagne.layers.ReshapeLayer(gen_nn, (yDim, -1))
 
-        Y = [self.y0.eval()]
-        next_Y = lambda prev_Y, X: self.rate.eval({self.Xsamp_Yprev: T.concatenate([X, prev_Y], axis=1)})
-        for i in range(_X.shape[0]):
-            Y.append(next_Y(Y[-1], _X[i, :]) + np.dot(nprand,np.diag(_RChol).T))
-        
-        Y = np.array(Y)
+        self.yDim = yDim
+        self.Y = T.matrix('Y')
+        self.u = lasagne.layers.get_output(self.CNN_YtoU, inputs=self.Y).T[:-(filter_size+1)]
 
-        return [X,Y]
+        if y_extDim is not None:
+            if 'CNN_YexttoU_Params' in GenerativeParams:
+                self.CNN_YexttoU = GenerativeParams['CNN_YexttoU_Params']['network']
+            else:
+                gen_nn = lasagne.layers.InputLayer((y_extDim, None))
+                gen_nn = lasagne.layers.ReshapeLayer(gen_nn, (1, 1, y_extDim, [1]))
+                gen_nn = lasagne.layers.Conv2DLayer(gen_nn, yDim, (y_extDim, filter_size),
+                                                    nonlinearity=lasagne.nonlinearities.linear,
+                                                    pad=(0, filter_size))
+                self.CNN_YexttoU = lasagne.layers.ReshapeLayer(gen_nn, (yDim, -1))
+            self.Y_ext = T.matrix('Y_ext')
+            self.u += lasagne.layers.get_output(self.CNN_YexttoU, inputs=self.Y_ext).T[:-(filter_size+1)]
+        else:
+            self.Y_ext = None
+
+        self.rate = self.u
+
 
     def getParams(self):
-        return [self.A] + [self.QChol] + [self.Q0Chol] + [self.RChol] + [self.x0] + lasagne.layers.get_all_params(self.NN_XYprevtoY)
+        rets = [self.RChol] + lasagne.layers.get_all_params(self.CNN_YtoU)
+        if self.Y_ext is not None:
+            rets += lasagne.layers.get_all_params(self.CNN_YexttoU)
+        return rets
 
-    def evaluateLogDensity(self,X,Y):
+    def evaluateLogDensity(self, Y, Y_ext=None):
         '''
         Ignores first observation in Y since you need a previous obs (should this be changed later?)
         '''
-        lag_Y = Y[:-1, :]
-        Y = Y[1:, :]
-        X = X[1:, :]
-        XYprev = T.concatenate([X, lag_Y], axis=1)
-        Ypred = theano.clone(self.rate,replace={self.Xsamp_Yprev: XYprev})
-        resY  = Y-Ypred
-        resX  = X[1:]-T.dot(X[:(X.shape[0]-1)],self.A.T)
-        resX0 = X[0]-self.x0
+        if self.Y_ext is not None:
+            Ypred = theano.clone(self.rate, replace={self.Y: Y.T,
+                                                     self.Y_ext: Y_ext.T})
+        else:
+            Ypred = theano.clone(self.rate, replace={self.Y: Y.T})
+        resY = Y - Ypred
 
-        LogDensity  = -(0.5*T.dot(resY.T,resY)*T.diag(self.Rinv)).sum() - (0.5*T.dot(resX.T,resX)*self.Lambda).sum() - 0.5*T.dot(T.dot(resX0,self.Lambda0),resX0.T)
+        LogDensity = -(0.5*T.dot(resY.T,resY)*T.diag(self.Rinv)).sum()
         if self.reg is not None:
-            LogDensity -= self.reg * T.abs_(self.NN_XYprevtoY.W[:self.xDim, :]).sum()  # add weight regularization to latent->obs mapping
-        LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y.shape[0] + 0.5*T.log(Tla.det(self.Lambda))*(Y.shape[0]-1) + 0.5*T.log(Tla.det(self.Lambda0))  - 0.5*(self.xDim + self.yDim)*np.log(2*np.pi)*Y.shape[0]
+            K, _ = lasagne.layers.get_all_params(self.CNN_YtoU)
+            Kp, _ = lasagne.layers.get_all_params(self.CNN_YexttoU)
+            LogDensity -= self.reg * (T.abs_(K).sum() + T.abs_(Kp).sum())  # add regularization to filters
+        LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y.shape[0] - 0.5*(self.yDim)*np.log(2*np.pi)*Y.shape[0]
 
         return LogDensity
 

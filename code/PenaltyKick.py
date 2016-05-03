@@ -184,3 +184,114 @@ class SGVB_PK():#(Trainable):
         thecost = thelik + theentropy
 
         return thecost/self.Y.shape[0]
+
+
+class SGVB_PK_simp():#(Trainable):
+    '''
+    This class is the same as the SGVB_PK class, but with no latents
+
+    Inputs:
+    gen_params_ball       - Dictionary of parameters that define the chosen GenerativeModel
+    GEN_MODEL_ball        - A class that inhereits from the GenerativeModel abstract class
+    gen_params_goalie     - Dictionary of parameters that define the chosen GenerativeModel
+    GEN_MODEL_goalie      - A class that inhereits from the GenerativeModel abstract class
+    yDim                  - Integer that specifies the dimensionality of the observations
+
+    --------------------------------------------------------------------------
+    This code is a reference implementation of the algorithm described in:
+    * Black box variational inference for state space models
+           - Archer et al (arxiv preprint, 2015)  [http://arxiv.org/abs/1511.07367]
+
+    The SGVB ("Stochastic Gradient Variational Bayes") inference technique is described
+    in the following publications:
+    * Auto-Encoding Variational Bayes
+           - Kingma, Welling (ICLR, 2014)
+    * Stochastic backpropagation and approximate inference in deep generative models.
+           - Rezende et al (ICML, 2014)
+    * Doubly stochastic variational bayes for non-conjugate inference.
+           - Titsias and Lazaro-Gredilla (ICML, 2014)
+    '''
+    def __init__(self,
+                 gen_params_ball,  # dictionary of generative model parameters
+                 GEN_MODEL_ball,  # class that inherits from GenerativeModel
+                 gen_params_goalie,  # dictionary of generative model parameters
+                 GEN_MODEL_goalie,  # class that inherits from GenerativeModel
+                 yCols_goalie=(0, 3, 6),  # columns holding goalie observations
+                 yCols_ball=(1, 2, 4, 5, 7, 8),  # columns holding ball observations
+                 feed_external=False  # feed external observations to each gen model
+                 ):
+
+        # instantiate rng's
+        self.srng = RandomStreams(seed=234)
+        self.nrng = np.random.RandomState(124)
+
+        #---------------------------------------------------------
+        ## actual model parameters
+        self.Y = T.matrix('Y')   # symbolic variables for the data
+
+        self.yDim_goalie = len(yCols_goalie)
+        self.yDim_ball = len(yCols_ball)
+
+        self.yDim = self.yDim_goalie + self.yDim_ball
+
+        self.yCols_goalie = yCols_goalie
+        self.yCols_ball = yCols_ball
+
+        self.feed_external = feed_external
+
+        # instantiate our prior model
+        if self.feed_external:
+            self.mprior_ball = GEN_MODEL_ball(gen_params_ball,
+                                              self.yDim_ball, srng=self.srng,
+                                              nrng=self.nrng, y_extDim=self.yDim_goalie)
+            self.mprior_goalie = GEN_MODEL_goalie(gen_params_goalie,
+                                                  self.yDim_goalie, srng=self.srng,
+                                                  nrng=self.nrng, y_extDim=self.yDim_ball)
+        else:
+            self.mprior_ball = GEN_MODEL_ball(gen_params_ball,
+                                              self.yDim_ball, srng=self.srng,
+                                              nrng=self.nrng)
+            self.mprior_goalie = GEN_MODEL_goalie(gen_params_goalie,
+                                                  self.yDim_goalie, srng=self.srng,
+                                                  nrng=self.nrng)
+
+        self.isTrainingGenerativeModel = True
+
+    def getParams(self):
+        '''
+        Return Generative and Recognition Model parameters that are currently being trained.
+        '''
+        params = []
+        if self.isTrainingGenerativeModel:
+            params = params + self.mprior_ball.getParams()
+            params = params + self.mprior_goalie.getParams()
+        return params
+
+    def EnableGenerativeModelTraining(self):
+        '''
+        Enable training of GenerativeModel parameters.
+        '''
+        self.isTrainingGenerativeModel = True;
+        print('Enable switching training/test mode in generative model class!\n')
+    def DisableGenerativeModelTraining(self):
+        '''
+        Disable training of GenerativeModel parameters.
+        '''
+        self.isTrainingGenerativeModel = False;
+        print('Enable switching training/test mode in generative model class!\n')
+
+    def cost(self):
+        '''
+        Compute a one-sample approximation the ELBO (lower bound on marginal likelihood), normalized by batch size (length of Y in first dimension).
+        '''
+
+        if self.feed_external:
+            thelik = self.mprior_goalie.evaluateLogDensity(self.Y[:, self.yCols_goalie],
+                                                           Y_ext=self.Y[:, self.yCols_ball])
+            thelik += self.mprior_ball.evaluateLogDensity(self.Y[:, self.yCols_ball],
+                                                          Y_ext=self.Y[:, self.yCols_goalie])
+        else:
+            thelik = self.mprior_goalie.evaluateLogDensity(self.Y[:, self.yCols_goalie])
+            thelik += self.mprior_ball.evaluateLogDensity(self.Y[:, self.yCols_ball])
+
+        return thelik/self.Y.shape[0]
