@@ -321,7 +321,7 @@ class FLDS(LDS):
         if self.reg is not None:
             K, _ = lasagne.layers.get_all_params(self.CNN_YtoU)
             Kp, _ = lasagne.layers.get_all_params(self.CNN_YexttoU)
-            LogDensity -= self.reg * (T.abs_(K).sum() + T.abs_(Kp).sum())  # add regularization to filters
+            LogDensity -= self.reg * (T.abs_(K).sum() + T.abs_(Kp).sum() + T.abs_(self.D).sum() + T.abs_(self.B).sum())  # add regularization to filters and mixing matrices
         LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y.shape[0] + 0.5*T.log(Tla.det(self.Lambda))*(Y.shape[0]-1) + 0.5*T.log(Tla.det(self.Lambda0))  - 0.5*(self.xDim + self.yDim)*np.log(2*np.pi)*Y.shape[0]
 
         if self.lmda is not None and self.theta is not None:
