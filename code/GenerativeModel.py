@@ -197,10 +197,10 @@ class FLDS(LDS):
     '''
     x(0) ~ N(x0, Q0 * Q0')
     x(t) ~ N(A x(t-1) + B u(t-1), Q * Q')
-    y(t) ~ N(NN(x(t)) + D u(t-1), R * R')
+    y(t) ~ y(t-1) + N(NN(x(t)) + D tanh(u(t-1)), R * R')
     u(t) ~ K * y(t) - convolution
 
-    Gamma is a vector that holds a multiplier for each latent. We penalize this to
+    Gamma is a vector that holds a multiplier for each latent. We can penalize this to
     ensure that information isn't diluted to many latents by enabling lmda and theta.
 
     Constrain latents to unit variance the following term in the ELBO:
@@ -274,8 +274,10 @@ class FLDS(LDS):
         else:
             self.Y_ext = None
 
-        self.rate = (lasagne.layers.get_output(self.NN_XtoY, inputs=self.Xsamp) +
-                     T.dot(self.u, self.D))
+        # add previous position so that we're modeling velecity rather than position
+        self.rate = T.horizontal_stack(self.Y[:, (0,)], self.Y[:, :-1]).T
+        self.rate += lasagne.layers.get_output(self.NN_XtoY, inputs=self.Xsamp)
+        self.rate += T.dot(T.tanh(self.u), self.D)
         self.latent_rate = T.dot(self.u, self.B)
 
     def sampleX(self, _N):
@@ -336,7 +338,11 @@ class SFLDS():
     y(t) ~ N(D u(t-1), R * R')
     u(t) ~ K y(t) - convolution
     '''
-    def __init__(self, GenerativeParams, yDim, y_extDim=None, srng = None, nrng = None):
+    def __init__(self, GenerativeParams, yDim, y_extDim=None, srng=None, nrng=None):
+        self.yDim = yDim
+        self.srng = srng
+        self.nrng = nrng
+
         if 'RChol' in GenerativeParams:
             self.RChol  = theano.shared(value=np.ndarray.flatten(GenerativeParams['RChol'].astype(theano.config.floatX)), name='RChol' ,borrow=True)     # cholesky of observation noise cov matrix
         else:
@@ -351,6 +357,11 @@ class SFLDS():
             self.reg = theano.shared(value=np.cast[theano.config.floatX](GenerativeParams['reg']), name='reg', borrow=True)
         else:
             self.reg = None
+
+        if 'D' in GenerativeParams:
+            self.D = theano.shared(value=GenerativeParams['D'].astype(theano.config.floatX), name='D', borrow=True)
+        else:
+            self.D = theano.shared(value=np.zeros((yDim, yDim)).astype(theano.config.floatX), name='D', borrow=True)
 
         if 'filter_size' in GenerativeParams:
             filter_size = GenerativeParams['filter_size']
@@ -388,11 +399,11 @@ class SFLDS():
         else:
             self.Y_ext = None
 
-        self.rate = self.u
-
+        self.rate = T.horizontal_stack(self.Y[:, (0,)], self.Y[:, :-1]).T
+        self.rate += T.dot(T.tanh(self.u), self.D)
 
     def getParams(self):
-        rets = [self.RChol] + lasagne.layers.get_all_params(self.CNN_YtoU)
+        rets = [self.D] + [self.RChol] + lasagne.layers.get_all_params(self.CNN_YtoU)
         if self.Y_ext is not None:
             rets += lasagne.layers.get_all_params(self.CNN_YexttoU)
         return rets
@@ -412,7 +423,7 @@ class SFLDS():
         if self.reg is not None:
             K, _ = lasagne.layers.get_all_params(self.CNN_YtoU)
             Kp, _ = lasagne.layers.get_all_params(self.CNN_YexttoU)
-            LogDensity -= self.reg * (T.abs_(K).sum() + T.abs_(Kp).sum())  # add regularization to filters
+            LogDensity -= self.reg * (T.abs_(K).sum() + T.abs_(Kp).sum() + T.abs_(self.D).sum())  # add regularization to filters
         LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y.shape[0] - 0.5*(self.yDim)*np.log(2*np.pi)*Y.shape[0]
 
         return LogDensity
