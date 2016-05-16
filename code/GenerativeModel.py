@@ -364,9 +364,9 @@ class SFLDS():
             self.D = theano.shared(value=np.zeros((yDim, yDim)).astype(theano.config.floatX), name='D', borrow=True)
 
         if 'filter_size' in GenerativeParams:
-            filter_size = GenerativeParams['filter_size']
+            self.filter_size = GenerativeParams['filter_size']
         else:
-            filter_size = 5
+            self.filter_size = 5
 
         self.Rinv = 1./(self.RChol**2) #Tla.matrix_inverse(T.dot(self.RChol ,T.transpose(self.RChol)))
 
@@ -375,14 +375,14 @@ class SFLDS():
         else:
             gen_nn = lasagne.layers.InputLayer((yDim, None))
             gen_nn = lasagne.layers.ReshapeLayer(gen_nn, (1, 1, yDim, [1]))
-            gen_nn = lasagne.layers.Conv2DLayer(gen_nn, yDim, (yDim, filter_size),
+            gen_nn = lasagne.layers.Conv2DLayer(gen_nn, yDim, (yDim, self.filter_size),
                                                 nonlinearity=lasagne.nonlinearities.linear,
-                                                pad=(0, filter_size))
+                                                pad=(0, self.filter_size))
             self.CNN_YtoU = lasagne.layers.ReshapeLayer(gen_nn, (yDim, -1))
 
         self.yDim = yDim
         self.Y = T.matrix('Y')
-        self.u = lasagne.layers.get_output(self.CNN_YtoU, inputs=self.Y).T[:-(filter_size+1)]
+        self.u = lasagne.layers.get_output(self.CNN_YtoU, inputs=self.Y).T[:-(self.filter_size+1)]
 
         if y_extDim is not None:
             if 'CNN_YexttoU_Params' in GenerativeParams:
@@ -390,12 +390,12 @@ class SFLDS():
             else:
                 gen_nn = lasagne.layers.InputLayer((y_extDim, None))
                 gen_nn = lasagne.layers.ReshapeLayer(gen_nn, (1, 1, y_extDim, [1]))
-                gen_nn = lasagne.layers.Conv2DLayer(gen_nn, yDim, (y_extDim, filter_size),
+                gen_nn = lasagne.layers.Conv2DLayer(gen_nn, yDim, (y_extDim, self.filter_size),
                                                     nonlinearity=lasagne.nonlinearities.linear,
-                                                    pad=(0, filter_size))
+                                                    pad=(0, self.filter_size))
                 self.CNN_YexttoU = lasagne.layers.ReshapeLayer(gen_nn, (yDim, -1))
             self.Y_ext = T.matrix('Y_ext')
-            self.u += lasagne.layers.get_output(self.CNN_YexttoU, inputs=self.Y_ext).T[:-(filter_size+1)]
+            self.u += lasagne.layers.get_output(self.CNN_YexttoU, inputs=self.Y_ext).T[:-(self.filter_size+1)]
         else:
             self.Y_ext = None
 
@@ -407,6 +407,19 @@ class SFLDS():
         if self.Y_ext is not None:
             rets += lasagne.layers.get_all_params(self.CNN_YexttoU)
         return rets
+
+    def getNextState(self, curr_y, curr_y_ext):
+        pred_u = lasagne.layers.get_output(self.CNN_YtoU,
+                                           inputs=curr_y.T).T[-(self.filter_size+1):-(self.filter_size)]
+        pred_u += lasagne.layers.get_output(self.CNN_YexttoU,
+                                            inputs=curr_y_ext.T).T[-(self.filter_size+1):-(self.filter_size)]
+        
+        pred_y = curr_y[-1]
+        pred_y += T.dot(T.tanh(pred_u), self.D)
+        pred_y += T.dot(self.srng.normal((self.yDim,)),
+                        T.diag(self.RChol).T)
+
+        return pred_y
 
     def evaluateLogDensity(self, Y, Y_ext=None):
         '''
