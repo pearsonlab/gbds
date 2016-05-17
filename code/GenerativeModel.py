@@ -335,7 +335,7 @@ class FLDS(LDS):
 
 class SFLDS():
     '''
-    y(t) ~ N(D u(t-1), R * R')
+    y(t) ~ y(t-1) + N(D tanh(NN(y(t-1), u(t-1))), R * R')
     u(t) ~ K y(t) - convolution
     '''
     def __init__(self, GenerativeParams, yDim, y_extDim=None, srng=None, nrng=None):
@@ -362,6 +362,15 @@ class SFLDS():
             self.D = theano.shared(value=GenerativeParams['D'].astype(theano.config.floatX), name='D', borrow=True)
         else:
             self.D = theano.shared(value=np.zeros((yDim, yDim)).astype(theano.config.floatX), name='D', borrow=True)
+
+        if 'NN_YUprevtoY_Params' in GenerativeParams:
+            # a neural network that maps the observations and control input to next observation
+            # this network must have a tanh nonlinearity on the last layer
+            self.NN_YUprevtoY = GenerativeParams['NN_YUprevtoY_Params']['network']
+            self.NN_layers = GenerativeParams['NN_YUprevtoY_Params']['num_layers']
+        else:
+            # default is to simply add a nonlinearity with no neural net.
+            self.NN_layers = 0
 
         if 'filter_size' in GenerativeParams:
             self.filter_size = GenerativeParams['filter_size']
@@ -400,12 +409,25 @@ class SFLDS():
             self.Y_ext = None
 
         self.rate = T.horizontal_stack(self.Y[:, (0,)], self.Y[:, :-1]).T
-        self.rate += T.dot(T.tanh(self.u), self.D)
+        Yprev = T.horizontal_stack(self.Y[:, (0,)], self.Y[:, :-1]).T
+        if self.NN_layers == 0:
+            control_out = T.tanh(self.u)
+        else:
+            if self.Y_ext is not None:
+                Yextprev = T.horizontal_stack(self.Y_ext[:, (0,)], self.Y_ext[:, :-1]).T
+                YUprev = T.horizontal_stack(Yprev, Yextprev, self.u)
+            else:
+                YUprev = T.horizontal_stack(Yprev, self.u)
+            control_out = lasagne.layers.get_output(self.NN_YUprevtoY, inputs=YUprev)
+
+        self.rate = Yprev + T.dot(control_out, self.D)
 
     def getParams(self):
         rets = [self.D] + [self.RChol] + lasagne.layers.get_all_params(self.CNN_YtoU)
         if self.Y_ext is not None:
             rets += lasagne.layers.get_all_params(self.CNN_YexttoU)
+        if self.NN_layers > 0:
+            rets += lasagne.layers.get_all_params(self.NN_YUprevtoY)
         return rets
 
     def getNextState(self, curr_y, curr_y_ext):
@@ -415,7 +437,18 @@ class SFLDS():
                                             inputs=curr_y_ext.T).T[-(self.filter_size+1):-(self.filter_size)]
         
         pred_y = curr_y[-1]
-        pred_y += T.dot(T.tanh(pred_u), self.D)
+        if self.NN_layers == 0:
+            control_out = T.tanh(pred_u)
+        else:
+            if self.Y_ext is not None:
+                YUprev = T.concatenate((pred_y.reshape((1, -1)),
+                                        curr_y_ext[-1].reshape((1, -1)),
+                                        pred_u), axis=1)
+            else:
+                YUprev = T.concatenate((pred_y.reshape((1, -1)),
+                                        pred_u), axis=1)
+            control_out = lasagne.layers.get_output(self.NN_YUprevtoY, inputs=YUprev)
+        pred_y += T.dot(control_out, self.D)
         pred_y += T.dot(self.srng.normal((self.yDim,)),
                         T.diag(self.RChol).T)
 
