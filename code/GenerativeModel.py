@@ -366,7 +366,7 @@ class SFLDS():
         if 'NN_YUprevtoY_Params' in GenerativeParams:
             # a neural network that maps the observations and control input to next observation
             # this network must have a tanh nonlinearity on the last layer
-            self.NN_YUprevtoY = GenerativeParams['NN_YUprevtoY_Params']['network']
+            self.NN_YUprevtoY = GenerativeParams['NN_YUprevtoY_Params']['networks']
             self.NN_layers = GenerativeParams['NN_YUprevtoY_Params']['num_layers']
         else:
             # default is to simply add a nonlinearity with no neural net.
@@ -418,7 +418,13 @@ class SFLDS():
                 YUprev = T.horizontal_stack(Yprev, Yextprev, self.u)
             else:
                 YUprev = T.horizontal_stack(Yprev, self.u)
-            control_out = lasagne.layers.get_output(self.NN_YUprevtoY, inputs=YUprev)
+            control_out = []
+            for i in range(self.yDim):
+                control_out.append(lasagne.layers.get_output(self.NN_YUprevtoY[i], inputs=YUprev))
+            if len(control_out) >= 2:
+                control_out = T.concatenate(control_out, axis=1)
+            else:
+                control_out = control_out[0]
 
         self.rate = Yprev + T.dot(control_out, self.D)
 
@@ -427,7 +433,8 @@ class SFLDS():
         if self.Y_ext is not None:
             rets += lasagne.layers.get_all_params(self.CNN_YexttoU)
         if self.NN_layers > 0:
-            rets += lasagne.layers.get_all_params(self.NN_YUprevtoY)
+            for nn in self.NN_YUprevtoY:
+                rets += lasagne.layers.get_all_params(nn)
         return rets
 
     def getNextState(self, curr_y, curr_y_ext):
@@ -447,7 +454,13 @@ class SFLDS():
             else:
                 YUprev = T.concatenate((pred_y.reshape((1, -1)),
                                         pred_u), axis=1)
-            control_out = lasagne.layers.get_output(self.NN_YUprevtoY, inputs=YUprev)
+            control_out = []
+            for i in range(self.yDim):
+                control_out.append(lasagne.layers.get_output(self.NN_YUprevtoY[i], inputs=YUprev))
+            if len(control_out) >= 2:
+                control_out = T.concatenate(control_out, axis=1)
+            else:
+                control_out = control_out[0]
         pred_y += T.dot(control_out, self.D)
         pred_y += T.dot(self.srng.normal((self.yDim,)),
                         T.diag(self.RChol).T)
