@@ -295,3 +295,78 @@ class SGVB_PK_simp():#(Trainable):
             thelik += self.mprior_ball.evaluateLogDensity(self.Y[:, self.yCols_ball])
 
         return thelik/self.Y.shape[0]
+
+class SGVB_PK_GP():#(Trainable):
+    '''
+    This class fits a gaussian process model to PenaltyKick data.
+
+    Inputs:
+    gen_params       - Dictionary of parameters that define the chosen GenerativeModel
+    GEN_MODEL        - A class that inhereits from the GenerativeModel abstract class
+    yDim             - Integer that specifies the dimensionality of the observations
+
+    --------------------------------------------------------------------------
+
+    The SGVB ("Stochastic Gradient Variational Bayes") inference technique is described
+    in the following publications:
+    * Auto-Encoding Variational Bayes
+           - Kingma, Welling (ICLR, 2014)
+    * Stochastic backpropagation and approximate inference in deep generative models.
+           - Rezende et al (ICML, 2014)
+    * Doubly stochastic variational bayes for non-conjugate inference.
+           - Titsias and Lazaro-Gredilla (ICML, 2014)
+    '''
+    def __init__(self,
+                 gen_params,  # dictionary of generative model parameters
+                 GEN_MODEL,  # class that inherits from GenerativeModel
+                 yDim,  # number of observation dimensions
+                 ntrials  # total number of trials in training set
+                 ):
+
+        # instantiate rng's
+        self.srng = RandomStreams(seed=234)
+        self.nrng = np.random.RandomState(124)
+
+        #---------------------------------------------------------
+        ## actual model parameters
+        self.Y = T.matrix('Y')   # symbolic variables for the data
+
+        self.yDim = yDim
+
+        # instantiate our prior model
+        self.mprior = GEN_MODEL(gen_params,
+                                self.yDim, ntrials, srng=self.srng,
+                                nrng=self.nrng)
+
+        self.isTrainingGenerativeModel = True
+
+    def getParams(self):
+        '''
+        Return Generative and Recognition Model parameters that are currently being trained.
+        '''
+        params = []
+        if self.isTrainingGenerativeModel:
+            params = params + self.mprior.getParams()
+        return params
+
+    def EnableGenerativeModelTraining(self):
+        '''
+        Enable training of GenerativeModel parameters.
+        '''
+        self.isTrainingGenerativeModel = True;
+        print('Enable switching training/test mode in generative model class!\n')
+
+    def DisableGenerativeModelTraining(self):
+        '''
+        Disable training of GenerativeModel parameters.
+        '''
+        self.isTrainingGenerativeModel = False;
+        print('Enable switching training/test mode in generative model class!\n')
+
+    def cost(self):
+        '''
+        Compute a one-sample approximation the ELBO (lower bound on marginal likelihood), normalized by batch size (length of Y in first dimension).
+        '''
+
+        thelik = self.mprior.evaluateLogDensity(self.Y)
+        return thelik / self.Y.shape[0]
