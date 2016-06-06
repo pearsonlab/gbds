@@ -713,6 +713,271 @@ class GPLDS():
         return "GenerativeGPModel"
 
 
+class GPLDS2(GenerativeModel):
+    """
+    Same as GPLDS but with latents (separate for ball and goalie).
+    All variables pertaining to latents (A, QChol, Q0Chol, Lambda, etc.) are
+    2 element tuples w/ the first element being for the goalie and second for
+    the shooter.
+    """
+    def __init__(self, GenerativeParams, xDim, yDim, ntrials, srng=None, nrng=None):
+        super(GPLDS2, self).__init__(GenerativeParams, xDim, yDim, srng, nrng)
+
+        self.ntrials = ntrials
+
+        # dynamics matrix
+        self.A = (theano.shared(value=.5*np.diag(np.ones(xDim[0]).astype(theano.config.floatX)), name='A_g', borrow=True),
+                  theano.shared(value=.5*np.diag(np.ones(xDim[1]).astype(theano.config.floatX)), name='A_b', borrow=True))
+        # cholesky of innovation cov matrix
+        self.QChol = (theano.shared(value=(np.eye(xDim[0])).astype(theano.config.floatX), name='QChol_g', borrow=True),
+                      theano.shared(value=(np.eye(xDim[1])).astype(theano.config.floatX), name='QChol_b', borrow=True))
+        # cholesky of starting distribution cov matrix
+        self.Q0Chol = (theano.shared(value=(np.eye(xDim[0])).astype(theano.config.floatX), name='Q0Chol_g',borrow=True),
+                       theano.shared(value=(np.eye(xDim[1])).astype(theano.config.floatX), name='Q0Chol_b',borrow=True))
+        # set to zero for stationary distribution
+        self.x0 = (theano.shared(value=np.zeros((xDim[0],)).astype(theano.config.floatX), name='x0_g', borrow=True),
+                   theano.shared(value=np.zeros((xDim[1],)).astype(theano.config.floatX), name='x0_b', borrow=True))
+        # coefficient for latent into control signal (x -> u)
+        self.B = theano.shared(value=np.zeros((xDim[0] + xDim[1],)).astype(theano.config.floatX), name='B', borrow=True)
+        # cholesky of observation noise cov matrix
+        self.RChol = theano.shared(value=np.random.randn(yDim).astype(theano.config.floatX) / 10, name='RChol', borrow=True)
+
+        # we assume diagonal covariance (RChol is a vector)
+        self.Rinv = 1. / (self.RChol**2)  #Tla.matrix_inverse(T.dot(self.RChol ,T.transpose(self.RChol)))
+        invert = lambda mat: Tla.matrix_inverse(T.dot(mat, mat.T))
+        self.Lambda = map(invert, self.QChol)
+        self.Lambda0 = map(invert, self.Q0Chol)
+
+        # size of time domain filter
+        if 'filter_size' in GenerativeParams:
+            self.filter_size = theano.shared(value=GenerativeParams['filter_size'], name='filter_size',
+                                             borrow=True)
+        else:
+            self.filter_size = theano.shared(value=5, name='filter_size',
+                                             borrow=True)
+        # space between bins in x direction of ball
+        if 'dx' in GenerativeParams:
+            self.dx = GenerativeParams['dx']
+        else:
+            self.dx = 0.05
+        # a, b, c, and d are unconstrained scalars that will form our contrained
+        # S matrix
+        if 'a' in GenerativeParams:
+            self.a = theano.shared(value=GenerativeParams['a'], name='a',
+                                   borrow=True)
+        else:
+            self.a = theano.shared(value=1.0, name='a',
+                                   borrow=True)
+        if 'b' in GenerativeParams:
+            self.b = theano.shared(value=GenerativeParams['b'], name='b',
+                                   borrow=True)
+        else:
+            self.b = theano.shared(value=0.0, name='b',
+                                   borrow=True)
+        if 'c' in GenerativeParams:
+            self.c = theano.shared(value=GenerativeParams['c'], name='c',
+                                   borrow=True)
+        else:
+            self.c = theano.shared(value=1.0, name='c',
+                                   borrow=True)
+        if 'd' in GenerativeParams:
+            self.d = theano.shared(value=GenerativeParams['d'], name='d',
+                                   borrow=True)
+        else:
+            self.d = theano.shared(value=0.0, name='d',
+                                   borrow=True)
+
+        if 'p' in GenerativeParams:
+            self.p = GenerativeParams['p']
+        else:
+            self.p = 10.0
+        if 'q' in GenerativeParams:
+            self.q = GenerativeParams['q']
+        else:
+            self.q = 10.0
+        # learnable velocity for each observation dimension
+        if 'vel' in GenerativeParams:
+            self.vel = theano.shared(value=GenerativeParams['vel'], name='vel',
+                                     borrow=True)
+        else:
+            self.vel = theano.shared(value=np.ones(self.yDim), name='vel',
+                                     borrow=True)
+
+        # create constrained parameters from uncontrained a, b, c, d
+        self.theta = T.exp(self.a)
+        self.phi = (self.theta / 2) * T.cos(np.pi / (self.p + 1)) * T.nnet.sigmoid(self.b)
+        self.omega = T.exp(self.c)
+        self.tau = (self.omega / 2) * T.cos(np.pi / (self.q + 1)) * T.nnet.sigmoid(self.d)
+        lambda_x = T.stack((self.phi, self.theta, self.phi), axis=0)
+        lambda_t = T.stack((self.tau, self.omega, self.tau), axis=0)
+        self.S = T.outer(lambda_x, lambda_t)
+
+        n_xbins = int(1 / self.dx) + 1
+        self.K = theano.shared(value=0.05 * np.random.randn(yDim, yDim,
+                                                            n_xbins, self.filter_size.eval())
+                               .astype(theano.config.floatX),
+                               name='K', borrow=True)
+
+    def interpolate_filters(self, data):
+        """
+        Returns interpolated filters (based on x-position) for each time step
+        """
+        # get max possible grid location
+        max_grid = int(1.0 / self.dx) + 1
+        # get index of grid location
+        gridloc = data[:, 1] / self.dx
+        # constrain to within grid
+        gridloc = T.maximum(gridloc, 0)
+        gridloc = T.minimum(gridloc, max_grid)
+        # how much to use of the lower bound filter
+        mix = (gridloc - T.floor(gridloc)).reshape((1, 1, -1, 1))
+        # interpolate filters for each data point
+        d_filts = (mix * self.K[:, :, T.floor(gridloc).astype('int16'), :] +
+                   (1 - mix) * self.K[:, :, T.ceil(gridloc).astype('int16'), :])
+
+        return d_filts
+
+    def split_data(self, data, col):
+        """
+        Splits data into a row for each step in a convolution. Similar to im2col
+        """
+        out, _ = theano.scan(fn=lambda idx, vect, length: vect[idx:idx + length],
+                             sequences=[T.arange(data.shape[0] -
+                                                 self.filter_size + 1)],
+                             non_sequences=[data[:, col], self.filter_size])
+        return out
+
+    def getNextState(self, curr_xg, curr_xb, curr_y):
+        """
+        Return predicted next data point based on given point
+        """
+        next_xg = curr_xg.dot(self.A[0]) + T.dot(self.srng.normal((self.xDim[0],)),
+                                                 self.QChol[0].T)
+        next_xb = curr_xb.dot(self.A[1]) + T.dot(self.srng.normal((self.xDim[1],)),
+                                                 self.QChol[1].T)
+        next_x = self.B * T.concatenate((next_xg, next_xb), axis=0)
+        filt = self.interpolate_filters(curr_y)[:, :, -1, :]
+        Y_pred = []
+        for i in range(self.yDim):  # to
+            control = (filt[:, i, :].T * curr_y).sum()
+            Y_pred.append(control)
+        Y_pred = T.stack(Y_pred, axis=0)
+        Y_pred += next_x
+        Y_pred = T.tanh(Y_pred)
+        Y_pred *= self.vel
+        Y_pred += curr_y[-1]  # previous state
+        Y_pred += T.dot(self.srng.normal((self.yDim,)),
+                        T.diag(self.RChol).T)  # noise
+        return Y_pred
+
+    def fit_trial(self, Xg, Xb, Y_true):
+        '''
+        Return a theano function that calculates a fit for the given data.
+        '''
+        X = T.horizontal_stack(Xg, Xb) * self.B
+
+        filts = self.interpolate_filters(Y_true)[:, :, :-1, :]
+        pad = np.zeros((self.filter_size.eval() - 1, self.yDim))
+        pad[:, 1] = 0.2
+        pad = theano.shared(value=pad)
+        Y_pad = T.vertical_stack(pad, Y_true[:-1, :])
+        Y_pred = []
+        for j in range(self.yDim):  # to
+            Y_pred.append(T.zeros((Y_true.shape[0] - 1, 1)))
+            for i in range(self.yDim):  # from
+                split_in = self.split_data(Y_pad, i)
+                control = (split_in * filts[i, j, :, :]).sum(axis=1, keepdims=True)
+                control += X[:-1, j]
+                Y_pred[j] += self.vel[j] * T.tanh(control)
+        Y_pred = T.horizontal_stack(*Y_pred)
+        Y_pred += Y_true[:-1]  # add previous observation
+        return Y_pred
+
+    def evaluateLogDensity(self, Xg, Xb, Y_true):
+        '''
+        Return a theano function that evaluates the density of the GenerativeModel.
+        '''
+        def get_X_LogDensity(X, i):
+            curr_X = X[1:, :]
+            Xpred = T.dot(X[:-1], self.A[i])
+            resX = curr_X - Xpred
+            resX0 = X[0] - self.x0[i]
+            LD = (-(0.5 * T.dot(resX.T, resX) * self.Lambda[i]).sum() -
+                  0.5 * T.dot(T.dot(resX0, self.Lambda0[i]), resX0.T))
+            return LD
+        LogDensity = get_X_LogDensity(Xg, 0) + get_X_LogDensity(Xb, 1)
+
+        X = T.horizontal_stack(Xg, Xb) * self.B
+
+        # don't need last filter since it will be used to predict the observation
+        # that succeeds our current data.
+        filts = self.interpolate_filters(Y_true)[:, :, :-1, :]
+        pad = np.zeros((self.filter_size.eval() - 1, self.yDim))
+        pad[:, 1] = 0.2
+        pad = theano.shared(value=pad)
+        Y_pad = T.vertical_stack(pad, Y_true[:-1, :])
+        Y_pred = []
+        for j in range(self.yDim):  # to
+            Y_pred.append(T.zeros((Y_true.shape[0] - 1, 1)))
+            for i in range(self.yDim):  # from
+                split_in = self.split_data(Y_pad, i)
+                control = (split_in * filts[i, j, :, :]).sum(axis=1, keepdims=True)
+                control += X[:-1, (j,)]
+                Y_pred[j] += self.vel[j] * T.tanh(control)
+
+        Y_pred = T.horizontal_stack(*Y_pred)
+        Y_pred += Y_true[:-1]  # add previous observation
+        resY = Y_true[1:] - Y_pred  # get errors for each point
+
+        LogDensity += -(0.5*T.dot(resY.T,resY)*T.diag(self.Rinv)).sum()
+        LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y_true.shape[0] - 0.5*(self.yDim)*np.log(2*np.pi)*Y_true.shape[0]
+
+        def sym_tridiag_det(a, b, length):
+            """
+            Computes the determinant of a symmetric tridiagonal
+            matrix with repeating diagonals
+
+            https://en.wikipedia.org/wiki/Tridiagonal_matrix#Determinant
+
+            a (float): value of center diagonal
+            b (float): value of up-1 and down-1 diagonals
+            length (int): length of center diagonal
+            """
+            f_lag = 0.0
+            f = 1.0
+            for i in xrange(length):
+                f_next = a * f - (b**2) * f_lag
+                f_lag = f
+                f = f_next
+            return f
+
+        # iterate over all filters
+        for i in range(self.yDim):
+            for j in range(self.yDim):
+                curr_filt = self.K[i, j, :, :]
+                conv_res = T.signal.conv.conv2d(curr_filt, self.S[::-1, ::-1],
+                                                border_mode='full')[1:-1, 1:-1]
+                LogDensity -= (0.5 * (curr_filt * conv_res).sum()) / self.ntrials
+
+        det_x = sym_tridiag_det(self.theta, self.phi,
+                                int(self.p))
+        det_t = sym_tridiag_det(self.omega, self.tau,
+                                int(self.q))
+        LogDensity += ((self.q / 2.0) * T.log(T.abs_(det_x))) * (self.yDim**2 / float(self.ntrials))
+        LogDensity += ((self.p / 2.0) * T.log(T.abs_(det_t))) * (self.yDim**2 / float(self.ntrials))
+
+        return LogDensity
+
+    def getParams(self):
+        '''
+        Return parameters of the GenerativeModel.
+        '''
+        rets = [self.K] + [self.a] + [self.b] + [self.c] + [self.d]
+        rets += [self.vel]
+        rets += list(self.A) + list(self.QChol) + list(self.Q0Chol) + [self.RChol] + list(self.x0)
+        return rets
+
+
 class PLDS(LDS):
     '''
     Gaussian linear dynamical system with Poisson count observations. Inherits Gaussian

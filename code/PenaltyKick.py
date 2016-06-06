@@ -370,3 +370,102 @@ class SGVB_PK_GP():#(Trainable):
 
         thelik = self.mprior.evaluateLogDensity(self.Y)
         return thelik / self.Y.shape[0]
+
+
+class SGVB_PK_GP2():#(Trainable):
+    '''
+    This class fits a gaussian process model to PenaltyKick data.
+
+    Inputs:
+    gen_params       - Dictionary of parameters that define the chosen GenerativeModel
+    GEN_MODEL        - A class that inhereits from the GenerativeModel abstract class
+    yDim             - Integer that specifies the dimensionality of the observations
+
+    --------------------------------------------------------------------------
+
+    The SGVB ("Stochastic Gradient Variational Bayes") inference technique is described
+    in the following publications:
+    * Auto-Encoding Variational Bayes
+           - Kingma, Welling (ICLR, 2014)
+    * Stochastic backpropagation and approximate inference in deep generative models.
+           - Rezende et al (ICML, 2014)
+    * Doubly stochastic variational bayes for non-conjugate inference.
+           - Titsias and Lazaro-Gredilla (ICML, 2014)
+    '''
+    def __init__(self,
+                 gen_params,  # dictionary of generative model parameters
+                 GEN_MODEL,  # class that inherits from GenerativeModel
+                 yDim,  # number of observation dimensions
+                 xDim_goalie,
+                 xDim_ball,
+                 rec_params_goalie, # dictionary of approximate posterior ("recognition model") parameters
+                 rec_params_ball, # dictionary of approximate posterior ("recognition model") parameters
+                 REC_MODEL,
+                 ntrials  # total number of trials in training set
+                 ):
+
+        # instantiate rng's
+        self.srng = RandomStreams(seed=234)
+        self.nrng = np.random.RandomState(124)
+
+        #---------------------------------------------------------
+        ## actual model parameters
+        self.X, self.Y = T.matrices('X', 'Y')   # symbolic variables for the data
+
+        self.xDim_goalie = xDim_goalie
+        self.xDim_ball = xDim_ball
+        self.yDim = yDim
+
+        # instantiate our prior and recognition models
+        self.mrec_goalie = REC_MODEL(rec_params_goalie, self.Y[:, (0,)],
+                                     self.xDim_goalie, self.xDim_goalie,
+                                     self.srng, self.nrng)
+        self.mrec_ball = REC_MODEL(rec_params_ball, self.Y[:, (1, 2)],
+                                   self.xDim_ball, self.xDim_ball,
+                                   self.srng, self.nrng)
+        self.mprior = GEN_MODEL(gen_params, (self.xDim_goalie, self.xDim_ball),
+                                self.yDim, ntrials, srng=self.srng,
+                                nrng=self.nrng)
+
+        self.isTrainingGenerativeModel = True
+        self.isTrainingRecognitionModel = True
+
+    def getParams(self):
+        '''
+        Return Generative and Recognition Model parameters that are currently being trained.
+        '''
+        params = []
+        if self.isTrainingRecognitionModel:
+            params += self.mrec_goalie.getParams()
+            params += self.mrec_ball.getParams()
+        if self.isTrainingGenerativeModel:
+            params += self.mprior.getParams()
+        return params
+
+    def EnableGenerativeModelTraining(self):
+        '''
+        Enable training of GenerativeModel parameters.
+        '''
+        self.isTrainingGenerativeModel = True
+        print('Enable switching training/test mode in generative model class!\n')
+
+    def DisableGenerativeModelTraining(self):
+        '''
+        Disable training of GenerativeModel parameters.
+        '''
+        self.isTrainingGenerativeModel = False
+        print('Enable switching training/test mode in generative model class!\n')
+
+    def cost(self):
+        '''
+        Compute a one-sample approximation the ELBO (lower bound on marginal likelihood), normalized by batch size (length of Y in first dimension).
+        '''
+        qg = self.mrec_goalie.getSample()
+        qb = self.mrec_ball.getSample()
+
+        theentropy = self.mrec_goalie.evalEntropy() + self.mrec_ball.evalEntropy()
+        thelik = self.mprior.evaluateLogDensity(qg, qb, self.Y)
+
+        thecost = thelik + theentropy
+
+        return thecost / self.Y.shape[0]
