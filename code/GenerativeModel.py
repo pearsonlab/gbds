@@ -973,7 +973,7 @@ class GPLDS2(GenerativeModel):
         Return parameters of the GenerativeModel.
         '''
         rets = [self.K] + [self.a] + [self.b] + [self.c] + [self.d]
-        rets += [self.vel]
+        rets += [self.vel] + [self.B]
         rets += list(self.A) + list(self.QChol) + list(self.Q0Chol) + [self.RChol] + list(self.x0)
         return rets
 
