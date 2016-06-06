@@ -851,18 +851,14 @@ class GPLDS2(GenerativeModel):
         """
         Return predicted next data point based on given point
         """
-        next_xg = curr_xg.dot(self.A[0]) + T.dot(self.srng.normal((self.xDim[0],)),
-                                                 self.QChol[0].T)
-        next_xb = curr_xb.dot(self.A[1]) + T.dot(self.srng.normal((self.xDim[1],)),
-                                                 self.QChol[1].T)
-        next_x = self.B * T.concatenate((next_xg, next_xb), axis=0)
+        curr_x = self.B * T.horizontal_stack(curr_xg, curr_xb)
         filt = self.interpolate_filters(curr_y)[:, :, -1, :]
         Y_pred = []
         for i in range(self.yDim):  # to
             control = (filt[:, i, :].T * curr_y).sum()
             Y_pred.append(control)
         Y_pred = T.stack(Y_pred, axis=0)
-        Y_pred += next_x
+        Y_pred += curr_x[-1]
         Y_pred = T.tanh(Y_pred)
         Y_pred *= self.vel
         Y_pred += curr_y[-1]  # previous state
@@ -887,7 +883,7 @@ class GPLDS2(GenerativeModel):
             for i in range(self.yDim):  # from
                 split_in = self.split_data(Y_pad, i)
                 control = (split_in * filts[i, j, :, :]).sum(axis=1, keepdims=True)
-                control += X[:-1, j]
+                control += X[:-1, (j,)]
                 Y_pred[j] += self.vel[j] * T.tanh(control)
         Y_pred = T.horizontal_stack(*Y_pred)
         Y_pred += Y_true[:-1]  # add previous observation
