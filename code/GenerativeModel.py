@@ -737,8 +737,6 @@ class GPLDS2(GenerativeModel):
         # set to zero for stationary distribution
         self.x0 = (theano.shared(value=np.zeros((xDim[0],)).astype(theano.config.floatX), name='x0_g', borrow=True),
                    theano.shared(value=np.zeros((xDim[1],)).astype(theano.config.floatX), name='x0_b', borrow=True))
-        # coefficient for latent into control signal (x -> u)
-        self.B = theano.shared(value=np.zeros((xDim[0] + xDim[1],)).astype(theano.config.floatX), name='B', borrow=True)
         # cholesky of observation noise cov matrix
         self.RChol = theano.shared(value=np.random.randn(yDim).astype(theano.config.floatX) / 10, name='RChol', borrow=True)
 
@@ -851,7 +849,7 @@ class GPLDS2(GenerativeModel):
         """
         Return predicted next data point based on given point
         """
-        curr_x = self.B * T.horizontal_stack(curr_xg, curr_xb)
+        curr_x = T.horizontal_stack(curr_xg, curr_xb)
         filt = self.interpolate_filters(curr_y)[:, :, -1, :]
         Y_pred = []
         for i in range(self.yDim):  # to
@@ -870,7 +868,7 @@ class GPLDS2(GenerativeModel):
         '''
         Return a theano function that calculates a fit for the given data.
         '''
-        X = T.horizontal_stack(Xg, Xb) * self.B
+        X = T.horizontal_stack(Xg, Xb)
 
         filts = self.interpolate_filters(Y_true)[:, :, :-1, :]
         pad = np.zeros((self.filter_size.eval() - 1, self.yDim))
@@ -903,7 +901,7 @@ class GPLDS2(GenerativeModel):
             return LD
         LogDensity = get_X_LogDensity(Xg, 0) + get_X_LogDensity(Xb, 1)
 
-        X = T.horizontal_stack(Xg, Xb) * self.B
+        X = T.horizontal_stack(Xg, Xb)
 
         # don't need last filter since it will be used to predict the observation
         # that succeeds our current data.
@@ -969,7 +967,7 @@ class GPLDS2(GenerativeModel):
         Return parameters of the GenerativeModel.
         '''
         rets = [self.K] + [self.a] + [self.b] + [self.c] + [self.d]
-        rets += [self.vel] + [self.B]
+        rets += [self.vel]
         rets += list(self.A) + list(self.QChol) + list(self.Q0Chol) + [self.RChol] + list(self.x0)
         return rets
 
