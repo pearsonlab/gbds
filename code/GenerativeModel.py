@@ -753,11 +753,7 @@ class GPLDS2(GenerativeModel):
         else:
             self.filter_size = theano.shared(value=5, name='filter_size',
                                              borrow=True)
-        # space between bins in x direction of ball
-        if 'dx' in GenerativeParams:
-            self.dx = GenerativeParams['dx']
-        else:
-            self.dx = 0.05
+
         # a, b, c, and d are unconstrained scalars that will form our contrained
         # S matrix
         if 'a' in GenerativeParams:
@@ -772,27 +768,11 @@ class GPLDS2(GenerativeModel):
         else:
             self.b = theano.shared(value=0.0, name='b',
                                    borrow=True)
-        if 'c' in GenerativeParams:
-            self.c = theano.shared(value=GenerativeParams['c'], name='c',
-                                   borrow=True)
-        else:
-            self.c = theano.shared(value=1.0, name='c',
-                                   borrow=True)
-        if 'd' in GenerativeParams:
-            self.d = theano.shared(value=GenerativeParams['d'], name='d',
-                                   borrow=True)
-        else:
-            self.d = theano.shared(value=0.0, name='d',
-                                   borrow=True)
 
         if 'p' in GenerativeParams:
             self.p = GenerativeParams['p']
         else:
             self.p = 10.0
-        if 'q' in GenerativeParams:
-            self.q = GenerativeParams['q']
-        else:
-            self.q = 10.0
         # learnable velocity for each observation dimension
         if 'vel' in GenerativeParams:
             self.vel = theano.shared(value=GenerativeParams['vel'], name='vel',
@@ -804,36 +784,11 @@ class GPLDS2(GenerativeModel):
         # create constrained parameters from uncontrained a, b, c, d
         self.theta = T.exp(self.a)
         self.phi = (self.theta / 2) * T.cos(np.pi / (self.p + 1)) * T.nnet.sigmoid(self.b)
-        self.omega = T.exp(self.c)
-        self.tau = (self.omega / 2) * T.cos(np.pi / (self.q + 1)) * T.nnet.sigmoid(self.d)
-        lambda_x = T.stack((self.phi, self.theta, self.phi), axis=0)
-        lambda_t = T.stack((self.tau, self.omega, self.tau), axis=0)
-        self.S = T.outer(lambda_x, lambda_t)
+        self.S = T.stack((self.phi, self.theta, self.phi), axis=0)
 
-        n_xbins = int(1 / self.dx) + 1
-        self.K = theano.shared(value=0.05 * np.random.randn(yDim, yDim,
-                                                            n_xbins, self.filter_size.eval())
+        self.K = theano.shared(value=0.05 * np.random.randn(yDim, yDim, self.filter_size.eval())
                                .astype(theano.config.floatX),
                                name='K', borrow=True)
-
-    def interpolate_filters(self, data):
-        """
-        Returns interpolated filters (based on x-position) for each time step
-        """
-        # get max possible grid location
-        max_grid = int(1.0 / self.dx) + 1
-        # get index of grid location
-        gridloc = data[:, 1] / self.dx
-        # constrain to within grid
-        gridloc = T.maximum(gridloc, 0)
-        gridloc = T.minimum(gridloc, max_grid)
-        # how much to use of the lower bound filter
-        mix = (gridloc - T.floor(gridloc)).reshape((1, 1, -1, 1))
-        # interpolate filters for each data point
-        d_filts = (mix * self.K[:, :, T.floor(gridloc).astype('int16'), :] +
-                   (1 - mix) * self.K[:, :, T.ceil(gridloc).astype('int16'), :])
-
-        return d_filts
 
     def split_data(self, data, col):
         """
@@ -850,10 +805,9 @@ class GPLDS2(GenerativeModel):
         Return predicted next data point based on given point
         """
         curr_x = T.horizontal_stack(curr_xg, curr_xb)
-        filt = self.interpolate_filters(curr_y)[:, :, -1, :]
         Y_pred = []
         for i in range(self.yDim):  # to
-            control = (filt[:, i, :].T * curr_y).sum()
+            control = (self.K[:, i, :].dot(curr_y)).sum()
             Y_pred.append(control)
         Y_pred = T.stack(Y_pred, axis=0)
         Y_pred += curr_x[-1]
@@ -870,7 +824,6 @@ class GPLDS2(GenerativeModel):
         '''
         X = T.horizontal_stack(Xg, Xb)
 
-        filts = self.interpolate_filters(Y_true)[:, :, :-1, :]
         pad = np.zeros((self.filter_size.eval() - 1, self.yDim))
         pad[:, 1] = 0.2
         pad = theano.shared(value=pad)
@@ -880,7 +833,7 @@ class GPLDS2(GenerativeModel):
             Y_pred.append(T.zeros((Y_true.shape[0] - 1, 1)))
             for i in range(self.yDim):  # from
                 split_in = self.split_data(Y_pad, i)
-                control = (split_in * filts[i, j, :, :]).sum(axis=1, keepdims=True)
+                control = (split_in * self.K[i, j, :]).sum(axis=1, keepdims=True)
                 control += X[:-1, (j,)]
                 Y_pred[j] += self.vel[j] * T.tanh(control)
         Y_pred = T.horizontal_stack(*Y_pred)
@@ -903,9 +856,6 @@ class GPLDS2(GenerativeModel):
 
         X = T.horizontal_stack(Xg, Xb)
 
-        # don't need last filter since it will be used to predict the observation
-        # that succeeds our current data.
-        filts = self.interpolate_filters(Y_true)[:, :, :-1, :]
         pad = np.zeros((self.filter_size.eval() - 1, self.yDim))
         pad[:, 1] = 0.2
         pad = theano.shared(value=pad)
@@ -915,7 +865,7 @@ class GPLDS2(GenerativeModel):
             Y_pred.append(T.zeros((Y_true.shape[0] - 1, 1)))
             for i in range(self.yDim):  # from
                 split_in = self.split_data(Y_pad, i)
-                control = (split_in * filts[i, j, :, :]).sum(axis=1, keepdims=True)
+                control = (split_in * self.K[i, j, :]).sum(axis=1, keepdims=True)
                 control += X[:-1, (j,)]
                 Y_pred[j] += self.vel[j] * T.tanh(control)
 
@@ -948,17 +898,14 @@ class GPLDS2(GenerativeModel):
         # iterate over all filters
         for i in range(self.yDim):
             for j in range(self.yDim):
-                curr_filt = self.K[i, j, :, :]
-                conv_res = T.signal.conv.conv2d(curr_filt, self.S[::-1, ::-1],
-                                                border_mode='full')[1:-1, 1:-1]
+                curr_filt = self.K[i, j, :].reshape((1, -1))
+                conv_res = T.signal.conv.conv2d(curr_filt, self.S.reshape((1, -1)),
+                                                border_mode='full')[:, 1:-1]
                 LogDensity -= (0.5 * (curr_filt * conv_res).sum()) / self.ntrials
 
-        det_x = sym_tridiag_det(self.theta, self.phi,
+        det_t = sym_tridiag_det(self.theta, self.phi,
                                 int(self.p))
-        det_t = sym_tridiag_det(self.omega, self.tau,
-                                int(self.q))
-        LogDensity += ((self.q / 2.0) * T.log(T.abs_(det_x))) * (self.yDim**2 / float(self.ntrials))
-        LogDensity += ((self.p / 2.0) * T.log(T.abs_(det_t))) * (self.yDim**2 / float(self.ntrials))
+        LogDensity += (0.5 * T.log(T.abs_(det_t))) * (self.yDim**2 / float(self.ntrials))
 
         return LogDensity
 
@@ -966,7 +913,7 @@ class GPLDS2(GenerativeModel):
         '''
         Return parameters of the GenerativeModel.
         '''
-        rets = [self.K] + [self.a] + [self.b] + [self.c] + [self.d]
+        rets = [self.K] + [self.a] + [self.b]
         rets += [self.vel]
         rets += list(self.A) + list(self.QChol) + list(self.Q0Chol) + [self.RChol] + list(self.x0)
         return rets

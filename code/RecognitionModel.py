@@ -200,6 +200,42 @@ class SmoothingLDSTimeSeries(RecognitionModel):
         out['Mu'] = np.asarray(self.Mu.eval({self.Input:yy}), dtype=theano.config.floatX)
         return out
 
+
+class SmoothingPastLDSTimeSeries(SmoothingLDSTimeSeries):
+    '''
+    SmoothingLDSTimeSeries that uses past observations in addition to current
+    to evaluate the latent.
+    '''
+    def __init__(self, RecognitionParams, Input, xDim, yDim,
+                 srng=None, nrng=None):
+        '''
+        :parameters:
+            - Input : 'y' theano.tensor.var.TensorVariable (n_input)
+                Observation matrix based on which we produce q(x)
+            - RecognitionParams : (dictionary)
+                Dictionary of timeseries-specific parameters. Contents:
+                     * A -
+                     * NN paramers...
+                     * others... TODO
+            - xDim, yDim, zDim : (integers) dimension of
+                latent space (x) and observation (y)
+        '''
+        if 'lag' in RecognitionParams:
+            self.lag = RecognitionParams['lag']
+        else:
+            self.lag = 5
+
+        # manipulate input to include past observations (up to lag) in each row
+        for i in range(1, self.lag + 1):
+            lagged = T.vertical_stack(Input[0, :yDim].reshape((1, yDim)),
+                                      Input[:-1, -yDim:])
+            Input = T.horizontal_stack(Input, lagged)
+
+        super(SmoothingPastLDSTimeSeries, self).__init__(RecognitionParams,
+                                                         Input, xDim, yDim,
+                                                         srng, nrng)
+
+
 class SmoothingTimeSeries(RecognitionModel):
     '''
     A "smoothing" recognition model. The constructor accepts neural networks which are used to parameterize mu and Sigma.
