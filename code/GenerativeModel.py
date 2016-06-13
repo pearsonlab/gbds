@@ -780,6 +780,10 @@ class GPLDS2(GenerativeModel):
         else:
             self.vel = theano.shared(value=np.ones(self.yDim), name='vel',
                                      borrow=True)
+        if 'yCols' in GenerativeParams:
+            self.yCols = GenerativeParams['yCols']
+        else:
+            self.yCols = [0, 1, 1]
 
         # create constrained parameters from uncontrained a, b, c, d
         self.theta = T.exp(self.a)
@@ -806,9 +810,11 @@ class GPLDS2(GenerativeModel):
         """
         curr_x = T.horizontal_stack(curr_xg, curr_xb)
         Y_pred = []
-        for i in range(self.yDim):  # to
-            control = (self.K[:, i, :].dot(curr_y)).sum()
-            Y_pred.append(control)
+        for j in range(self.yDim):  # to
+            Y_pred.append(0)
+            for i in range(self.yDim):  # from
+                if self.yCols[i] == self.yCols[j]:
+                    Y_pred[j] += (curr_y[:, i] * self.K[i, j, :]).sum()
         Y_pred = T.stack(Y_pred, axis=0)
         Y_pred += curr_x[-1]
         Y_pred = T.tanh(Y_pred)
@@ -830,13 +836,15 @@ class GPLDS2(GenerativeModel):
         Y_pad = T.vertical_stack(pad, Y_true[:-1, :])
         Y_pred = []
         for j in range(self.yDim):  # to
-            Y_pred.append(T.zeros((Y_true.shape[0] - 1, 1)))
+            Y_pred.append(T.zeros((Y_true.shape[0] - 1,)))
             for i in range(self.yDim):  # from
-                split_in = self.split_data(Y_pad, i)
-                control = (split_in * self.K[i, j, :]).sum(axis=1, keepdims=True)
-                control += X[:-1, (j,)]
-                Y_pred[j] += self.vel[j] * T.tanh(control)
-        Y_pred = T.horizontal_stack(*Y_pred)
+                if self.yCols[i] == self.yCols[j]:
+                    split_in = self.split_data(Y_pad, i)
+                    Y_pred[j] += (split_in * self.K[i, j, :]).sum(axis=1)
+        Y_pred = T.stack(Y_pred, axis=1)
+        Y_pred += X[:-1, :]
+        Y_pred = T.tanh(Y_pred)
+        Y_pred = self.vel.reshape((1, self.yDim)) * Y_pred
         Y_pred += Y_true[:-1]  # add previous observation
         return Y_pred
 
@@ -844,16 +852,6 @@ class GPLDS2(GenerativeModel):
         '''
         Return a theano function that evaluates the density of the GenerativeModel.
         '''
-        def get_X_LogDensity(X, i):
-            curr_X = X[1:, :]
-            Xpred = T.dot(X[:-1], self.A[i])
-            resX = curr_X - Xpred
-            resX0 = X[0] - self.x0[i]
-            LD = (-(0.5 * T.dot(resX.T, resX) * self.Lambda[i]).sum() -
-                  0.5 * T.dot(T.dot(resX0, self.Lambda0[i]), resX0.T))
-            return LD
-        LogDensity = get_X_LogDensity(Xg, 0) + get_X_LogDensity(Xb, 1)
-
         X = T.horizontal_stack(Xg, Xb)
 
         pad = np.zeros((self.filter_size.eval() - 1, self.yDim))
@@ -861,20 +859,37 @@ class GPLDS2(GenerativeModel):
         pad = theano.shared(value=pad)
         Y_pad = T.vertical_stack(pad, Y_true[:-1, :])
         Y_pred = []
+        filtered = {}
         for j in range(self.yDim):  # to
-            Y_pred.append(T.zeros((Y_true.shape[0] - 1, 1)))
+            Y_pred.append(T.zeros((Y_true.shape[0] - 1,)))
             for i in range(self.yDim):  # from
                 split_in = self.split_data(Y_pad, i)
-                control = (split_in * self.K[i, j, :]).sum(axis=1, keepdims=True)
-                control += X[:-1, (j,)]
-                Y_pred[j] += self.vel[j] * T.tanh(control)
-
-        Y_pred = T.horizontal_stack(*Y_pred)
+                filtered[(i, j)] = (split_in * self.K[i, j, :]).sum(axis=1)
+                if self.yCols[i] == self.yCols[j]:  # if filter over self
+                    Y_pred[j] += filtered[(i, j)]  # add self-smoothing
+        Y_pred = T.stack(Y_pred, axis=1)
+        Y_pred += X[:-1, :]  # add setpoint
+        Y_pred = T.tanh(Y_pred)
+        Y_pred = self.vel.reshape((1, self.yDim)) * Y_pred
         Y_pred += Y_true[:-1]  # add previous observation
         resY = Y_true[1:] - Y_pred  # get errors for each point
 
-        LogDensity += -(0.5*T.dot(resY.T,resY)*T.diag(self.Rinv)).sum()
+        LogDensity = -(0.5*T.dot(resY.T,resY)*T.diag(self.Rinv)).sum()
         LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y_true.shape[0] - 0.5*(self.yDim)*np.log(2*np.pi)*Y_true.shape[0]
+
+        def get_X_LogDensity(X, i):
+            curr_X = X[1:, :]
+            Xpred = T.dot(X[:-1], self.A[i])
+            if i == 0:  # if goalie
+                Xpred += (filtered[(1, 0)] + filtered[(2, 0)]).reshape((-1, 1))
+            elif i == 1:  # if shooter
+                Xpred += T.stack((filtered[(0, 1)], filtered[(0, 2)]), axis=1)
+            resX = curr_X - Xpred
+            resX0 = X[0] - self.x0[i]
+            LD = (-(0.5 * T.dot(resX.T, resX) * self.Lambda[i]).sum() -
+                  0.5 * T.dot(T.dot(resX0, self.Lambda0[i]), resX0.T))
+            return LD
+        LogDensity += get_X_LogDensity(Xg, 0) + get_X_LogDensity(Xb, 1)
 
         def sym_tridiag_det(a, b, length):
             """
