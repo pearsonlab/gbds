@@ -464,6 +464,7 @@ class SGVB_PK_GP2():#(Trainable):
         qb = self.mrec_ball.getSample()
 
         theentropy = self.mrec_goalie.evalEntropy() + self.mrec_ball.evalEntropy()
+        theentropy += self.mprior.evalEntropy()
         thelik = self.mprior.evaluateLogDensity(qg, qb, self.Y)
 
         thecost = thelik + theentropy

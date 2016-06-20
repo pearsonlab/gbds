@@ -785,14 +785,56 @@ class GPLDS2(GenerativeModel):
         else:
             self.yCols = [0, 1, 1]
 
-        # create constrained parameters from uncontrained a, b, c, d
+        # create constrained parameters from uncontrained a, b
         self.theta = T.exp(self.a)
         self.phi = (self.theta / 2) * T.cos(np.pi / (self.p + 1)) * T.nnet.sigmoid(self.b)
         self.S = T.stack((self.phi, self.theta, self.phi), axis=0)
 
-        self.K = theano.shared(value=0.05 * np.random.randn(yDim, yDim, self.filter_size.eval())
-                               .astype(theano.config.floatX),
-                               name='K', borrow=True)
+        self.c = {}  # unconstrained diagonals
+        self.d = {}  # unconstrained lower triangle
+        self.L = {}  # combined contrained L matrix
+        self.K_mu = {}  # mean filters
+        self.K_b = {}  # bias for each filter
+        for i in range(self.yDim):
+            for j in range(self.yDim):
+                self.K_mu[(i, j)] = theano.shared(value=0.05 * np.random.randn(self.filter_size.eval())
+                                                  .astype(theano.config.floatX),
+                                                  name='K_mu_%ito%i' % (i, j), borrow=True)
+                self.K_b[(i, j)] = theano.shared(value=0.0,
+                                                 name='K_b_%ito%i' % (i, j), borrow=True)
+                self.c[(i, j)] = theano.shared(value=np.zeros(self.filter_size.eval())
+                                               .astype(theano.config.floatX),
+                                               name='c_%ito%i' % (i, j), borrow=True)
+                self.d[(i, j)] = theano.shared(value=np.zeros((self.filter_size.eval(), self.filter_size.eval()))
+                                               .astype(theano.config.floatX),
+                                               name='d_%ito%i' % (i, j), borrow=True)
+                Ldiag = T.exp(self.c[(i, j)])  # diagonal must be positive
+                self.L[(i, j)] = T.tril(self.d[(i, j)], k=-1) + T.diag(Ldiag)
+
+    def sample_K(self):
+        """
+        Obtain a sample filter, K, from the gaussian distribution
+        """
+        K = {}
+        for i in range(self.yDim):
+            for j in range(self.yDim):
+                K[(i, j)] = (self.K_mu[(i, j)] +
+                             self.L[(i, j)].dot(
+                             self.srng.normal((self.filter_size,))))
+        return K
+
+    def evalEntropy(self):
+        """
+        Return the entropy term for K in the ELBO
+        """
+        entropy = 0
+        for i in range(self.yDim):
+            for j in range(self.yDim):
+                Ldiag = T.diag(self.L[(i, j)])
+                entropy += (self.filter_size / 2.0) * (1 + T.log(2 * np.pi))
+                entropy += T.log(Ldiag).sum()
+        entropy /= float(self.ntrials)
+        return entropy
 
     def split_data(self, data, col):
         """
@@ -808,13 +850,14 @@ class GPLDS2(GenerativeModel):
         """
         Return predicted next data point based on given point
         """
+        K = self.sample_K()
         curr_x = T.horizontal_stack(curr_xg, curr_xb)
         Y_pred = []
         for j in range(self.yDim):  # to
             Y_pred.append(0)
             for i in range(self.yDim):  # from
                 if self.yCols[i] == self.yCols[j]:
-                    Y_pred[j] += (curr_y[:, i] * self.K[i, j, :]).sum()
+                    Y_pred[j] += (curr_y[:, i] * K[(i, j)]).sum()
         Y_pred = T.stack(Y_pred, axis=0)
         Y_pred += curr_x[-1]
         Y_pred = T.tanh(Y_pred)
@@ -828,6 +871,7 @@ class GPLDS2(GenerativeModel):
         '''
         Return a theano function that calculates a fit for the given data.
         '''
+        K = self.sample_K()
         X = T.horizontal_stack(Xg, Xb)
 
         pad = np.zeros((self.filter_size.eval() - 1, self.yDim))
@@ -840,7 +884,7 @@ class GPLDS2(GenerativeModel):
             for i in range(self.yDim):  # from
                 if self.yCols[i] == self.yCols[j]:
                     split_in = self.split_data(Y_pad, i)
-                    Y_pred[j] += (split_in * self.K[i, j, :]).sum(axis=1)
+                    Y_pred[j] += (split_in * K[(i, j)]).sum(axis=1)
         Y_pred = T.stack(Y_pred, axis=1)
         Y_pred += X[:-1, :]
         Y_pred = T.tanh(Y_pred)
@@ -852,6 +896,7 @@ class GPLDS2(GenerativeModel):
         '''
         Return a theano function that evaluates the density of the GenerativeModel.
         '''
+        K = self.sample_K()
         X = T.horizontal_stack(Xg, Xb)
 
         pad = np.zeros((self.filter_size.eval() - 1, self.yDim))
@@ -864,7 +909,7 @@ class GPLDS2(GenerativeModel):
             Y_pred.append(T.zeros((Y_true.shape[0] - 1,)))
             for i in range(self.yDim):  # from
                 split_in = self.split_data(Y_pad, i)
-                filtered[(i, j)] = (split_in * self.K[i, j, :]).sum(axis=1)
+                filtered[(i, j)] = (split_in * K[(i, j)]).sum(axis=1)
                 if self.yCols[i] == self.yCols[j]:  # if filter over self
                     Y_pred[j] += filtered[(i, j)]  # add self-smoothing
         Y_pred = T.stack(Y_pred, axis=1)
@@ -913,7 +958,8 @@ class GPLDS2(GenerativeModel):
         # iterate over all filters
         for i in range(self.yDim):
             for j in range(self.yDim):
-                curr_filt = self.K[i, j, :].reshape((1, -1))
+                # subtract bias bc filters don't need to be mean zero
+                curr_filt = K[(i, j)].reshape((1, -1)) - self.K_b[(i, j)]
                 conv_res = T.signal.conv.conv2d(curr_filt, self.S.reshape((1, -1)),
                                                 border_mode='full')[:, 1:-1]
                 LogDensity -= (0.5 * (curr_filt * conv_res).sum()) / self.ntrials
@@ -928,9 +974,10 @@ class GPLDS2(GenerativeModel):
         '''
         Return parameters of the GenerativeModel.
         '''
-        rets = [self.K] + [self.a] + [self.b]
-        rets += [self.vel]
-        rets += list(self.A) + list(self.QChol) + list(self.Q0Chol) + [self.RChol] + list(self.x0)
+        rets = self.K_mu.values() + [self.a] + [self.b] + self.c.values()
+        rets += self.d.values() + self.K_b.values()  # + [self.vel]
+        rets += list(self.A) + list(self.QChol) + list(self.Q0Chol)
+        rets += [self.RChol] + list(self.x0)
         return rets
 
 
