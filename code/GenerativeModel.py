@@ -738,7 +738,10 @@ class GPLDS2(GenerativeModel):
         self.x0 = (theano.shared(value=np.zeros((xDim[0],)).astype(theano.config.floatX), name='x0_g', borrow=True),
                    theano.shared(value=np.zeros((xDim[1],)).astype(theano.config.floatX), name='x0_b', borrow=True))
         # cholesky of observation noise cov matrix
-        self.RChol = theano.shared(value=np.random.randn(yDim).astype(theano.config.floatX) / 10, name='RChol', borrow=True)
+        if 'RChol' in GenerativeParams:
+            self.RChol = theano.shared(value=GenerativeParams['RChol'].astype(theano.config.floatX), name='RChol', borrow=True)
+        else:
+            self.RChol = theano.shared(value=np.random.randn(yDim).astype(theano.config.floatX) / 10, name='RChol', borrow=True)
 
         # we assume diagonal covariance (RChol is a vector)
         self.Rinv = 1. / (self.RChol**2)  #Tla.matrix_inverse(T.dot(self.RChol ,T.transpose(self.RChol)))
@@ -977,7 +980,7 @@ class GPLDS2(GenerativeModel):
         rets = self.K_mu.values() + [self.a] + [self.b] + self.c.values()
         rets += self.d.values() + self.K_b.values()  # + [self.vel]
         rets += list(self.A) + list(self.QChol) + list(self.Q0Chol)
-        rets += [self.RChol] + list(self.x0)
+        rets += list(self.x0)  # + [self.RChol]
         return rets
 
 
