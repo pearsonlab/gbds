@@ -417,11 +417,11 @@ class SGVB_PK_GP2():#(Trainable):
         self.yDim = yDim
 
         # instantiate our prior and recognition models
-        self.mrec_goalie = REC_MODEL(rec_params_goalie, self.Y[:, (0,)],
-                                     self.xDim_goalie, self.xDim_goalie,
+        self.mrec_goalie = REC_MODEL(rec_params_goalie, self.Y,
+                                     self.xDim_goalie, self.yDim,
                                      self.srng, self.nrng)
-        self.mrec_ball = REC_MODEL(rec_params_ball, self.Y[:, (1, 2)],
-                                   self.xDim_ball, self.xDim_ball,
+        self.mrec_ball = REC_MODEL(rec_params_ball, self.Y,
+                                   self.xDim_ball, self.yDim,
                                    self.srng, self.nrng)
         self.mprior = GEN_MODEL(gen_params, (self.xDim_goalie, self.xDim_ball),
                                 self.yDim, ntrials, srng=self.srng,
