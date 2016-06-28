@@ -800,19 +800,20 @@ class GPLDS2(GenerativeModel):
         self.K_b = {}  # bias for each filter
         for i in range(self.yDim):
             for j in range(self.yDim):
-                self.K_mu[(i, j)] = theano.shared(value=0.05 * np.random.randn(self.filter_size.eval())
-                                                  .astype(theano.config.floatX),
-                                                  name='K_mu_%ito%i' % (i, j), borrow=True)
-                self.K_b[(i, j)] = theano.shared(value=0.0,
-                                                 name='K_b_%ito%i' % (i, j), borrow=True)
-                self.c[(i, j)] = theano.shared(value=np.zeros(self.filter_size.eval())
-                                               .astype(theano.config.floatX),
-                                               name='c_%ito%i' % (i, j), borrow=True)
-                self.d[(i, j)] = theano.shared(value=np.zeros((self.filter_size.eval(), self.filter_size.eval()))
-                                               .astype(theano.config.floatX),
-                                               name='d_%ito%i' % (i, j), borrow=True)
-                Ldiag = T.exp(self.c[(i, j)])  # diagonal must be positive
-                self.L[(i, j)] = T.tril(self.d[(i, j)], k=-1) + T.diag(Ldiag)
+                if i == j or self.yCols[i] != self.yCols[j]:
+                    self.K_mu[(i, j)] = theano.shared(value=0.05 * np.random.randn(self.filter_size.eval())
+                                                      .astype(theano.config.floatX),
+                                                      name='K_mu_%ito%i' % (i, j), borrow=True)
+                    self.K_b[(i, j)] = theano.shared(value=0.0,
+                                                     name='K_b_%ito%i' % (i, j), borrow=True)
+                    self.c[(i, j)] = theano.shared(value=np.zeros(self.filter_size.eval())
+                                                   .astype(theano.config.floatX),
+                                                   name='c_%ito%i' % (i, j), borrow=True)
+                    self.d[(i, j)] = theano.shared(value=np.zeros((self.filter_size.eval(), self.filter_size.eval()))
+                                                   .astype(theano.config.floatX),
+                                                   name='d_%ito%i' % (i, j), borrow=True)
+                    Ldiag = T.exp(self.c[(i, j)])  # diagonal must be positive
+                    self.L[(i, j)] = T.tril(self.d[(i, j)], k=-1) + T.diag(Ldiag)
 
     def sample_K(self):
         """
@@ -821,9 +822,10 @@ class GPLDS2(GenerativeModel):
         K = {}
         for i in range(self.yDim):
             for j in range(self.yDim):
-                K[(i, j)] = (self.K_mu[(i, j)] +
-                             self.L[(i, j)].dot(
-                             self.srng.normal((self.filter_size,))))
+                if i == j or self.yCols[i] != self.yCols[j]:
+                    K[(i, j)] = (self.K_mu[(i, j)] +
+                                 self.L[(i, j)].dot(
+                                 self.srng.normal((self.filter_size,))))
         return K
 
     def evalEntropy(self):
@@ -833,9 +835,10 @@ class GPLDS2(GenerativeModel):
         entropy = 0
         for i in range(self.yDim):
             for j in range(self.yDim):
-                Ldiag = T.diag(self.L[(i, j)])
-                entropy += (self.filter_size / 2.0) * (1 + T.log(2 * np.pi))
-                entropy += T.log(Ldiag).sum()
+                if i == j or self.yCols[i] != self.yCols[j]:
+                    Ldiag = T.diag(self.L[(i, j)])
+                    entropy += (self.filter_size / 2.0) * (1 + T.log(2 * np.pi))
+                    entropy += T.log(Ldiag).sum()
         entropy /= float(self.ntrials)
         return entropy
 
@@ -849,25 +852,44 @@ class GPLDS2(GenerativeModel):
                              non_sequences=[data[:, col], self.filter_size])
         return out
 
-    def getNextState(self, curr_xg, curr_xb, curr_y):
+    def getNextState(self, K, curr_xg, curr_xb, curr_y):
         """
         Return predicted next data point based on given point
         """
-        K = self.sample_K()
         curr_x = T.horizontal_stack(curr_xg, curr_xb)
-        Y_pred = []
-        for j in range(self.yDim):  # to
-            Y_pred.append(0)
-            for i in range(self.yDim):  # from
-                if self.yCols[i] == self.yCols[j]:
-                    Y_pred[j] += (curr_y[:, i] * K[(i, j)]).sum()
-        Y_pred = T.stack(Y_pred, axis=0)
-        Y_pred += curr_x[-1]
-        Y_pred = T.tanh(Y_pred)
-        Y_pred *= self.vel
-        Y_pred += curr_y[-1]  # previous state
+
+        Y_pred = self.getYPred(curr_x, curr_y, K)[-1]
         Y_pred += T.dot(self.srng.normal((self.yDim,)),
                         T.diag(self.RChol).T)  # noise
+        return Y_pred
+
+    def getYPred(self, X, Y_true, K, pad=None):
+        if pad is not None:
+            Y_pad = T.vertical_stack(pad, Y_true)
+        else:
+            Y_pad = Y_true.copy()
+            Y_true = Y_true[self.filter_size - 1:]
+            X = X[self.filter_size - 1:]
+        error = []
+        for j in range(self.yDim):  # to
+            error.append(T.zeros((Y_true.shape[0],)))
+            for i in range(self.yDim):  # from
+                if self.yCols[i] != self.yCols[j]:
+                    split_in = self.split_data(Y_pad, i)
+                    error[j] -= (split_in * K[(i, j)]).sum(axis=1)  # subtract external dynamics
+        error = T.stack(error, axis=1)
+        error -= X  # subtract internal dynamics
+        error += Y_true  # add position to get error (position - setpoint)
+        pad = T.zeros((self.filter_size - 1, self.yDim))
+        error_pad = T.vertical_stack(pad, error)
+        Y_pred = []
+        for i in range(self.yDim):
+            split_in = self.split_data(error_pad, i)
+            Y_pred.append((split_in * K[(i, i)]).sum(axis=1))  # smooth errors
+        Y_pred = T.stack(Y_pred, axis=1)
+        Y_pred = T.tanh(Y_pred)
+        Y_pred = self.vel.reshape((1, self.yDim)) * Y_pred
+        Y_pred += Y_true  # add previous observation
         return Y_pred
 
     def fit_trial(self, Xg, Xb, Y_true):
@@ -880,19 +902,7 @@ class GPLDS2(GenerativeModel):
         pad = np.zeros((self.filter_size.eval() - 1, self.yDim))
         pad[:, 1] = 0.2
         pad = theano.shared(value=pad)
-        Y_pad = T.vertical_stack(pad, Y_true[:-1, :])
-        Y_pred = []
-        for j in range(self.yDim):  # to
-            Y_pred.append(T.zeros((Y_true.shape[0] - 1,)))
-            for i in range(self.yDim):  # from
-                if self.yCols[i] == self.yCols[j]:
-                    split_in = self.split_data(Y_pad, i)
-                    Y_pred[j] += (split_in * K[(i, j)]).sum(axis=1)
-        Y_pred = T.stack(Y_pred, axis=1)
-        Y_pred += X[:-1, :]
-        Y_pred = T.tanh(Y_pred)
-        Y_pred = self.vel.reshape((1, self.yDim)) * Y_pred
-        Y_pred += Y_true[:-1]  # add previous observation
+        Y_pred = self.getYPred(X, Y_true, K, pad=pad)[:-1]
         return Y_pred
 
     def evaluateLogDensity(self, Xg, Xb, Y_true):
@@ -905,21 +915,7 @@ class GPLDS2(GenerativeModel):
         pad = np.zeros((self.filter_size.eval() - 1, self.yDim))
         pad[:, 1] = 0.2
         pad = theano.shared(value=pad)
-        Y_pad = T.vertical_stack(pad, Y_true[:-1, :])
-        Y_pred = []
-        filtered = {}
-        for j in range(self.yDim):  # to
-            Y_pred.append(T.zeros((Y_true.shape[0] - 1,)))
-            for i in range(self.yDim):  # from
-                split_in = self.split_data(Y_pad, i)
-                filtered[(i, j)] = (split_in * K[(i, j)]).sum(axis=1)
-                if self.yCols[i] == self.yCols[j]:  # if filter over self
-                    Y_pred[j] += filtered[(i, j)]  # add self-smoothing
-        Y_pred = T.stack(Y_pred, axis=1)
-        Y_pred += X[:-1, :]  # add setpoint
-        Y_pred = T.tanh(Y_pred)
-        Y_pred = self.vel.reshape((1, self.yDim)) * Y_pred
-        Y_pred += Y_true[:-1]  # add previous observation
+        Y_pred = self.getYPred(X, Y_true, K, pad=pad)[:-1]
         resY = Y_true[1:] - Y_pred  # get errors for each point
 
         LogDensity = -(0.5*T.dot(resY.T,resY)*T.diag(self.Rinv)).sum()
@@ -928,10 +924,6 @@ class GPLDS2(GenerativeModel):
         def get_X_LogDensity(X, i):
             curr_X = X[1:, :]
             Xpred = T.dot(X[:-1], self.A[i])
-            if i == 0:  # if goalie
-                Xpred += (filtered[(1, 0)] + filtered[(2, 0)]).reshape((-1, 1))
-            elif i == 1:  # if shooter
-                Xpred += T.stack((filtered[(0, 1)], filtered[(0, 2)]), axis=1)
             resX = curr_X - Xpred
             resX0 = X[0] - self.x0[i]
             LD = (-(0.5 * T.dot(resX.T, resX) * self.Lambda[i]).sum() -
@@ -961,11 +953,12 @@ class GPLDS2(GenerativeModel):
         # iterate over all filters
         for i in range(self.yDim):
             for j in range(self.yDim):
-                # subtract bias bc filters don't need to be mean zero
-                curr_filt = K[(i, j)].reshape((1, -1)) - self.K_b[(i, j)]
-                conv_res = T.signal.conv.conv2d(curr_filt, self.S.reshape((1, -1)),
-                                                border_mode='full')[:, 1:-1]
-                LogDensity -= (0.5 * (curr_filt * conv_res).sum()) / self.ntrials
+                if i == j or self.yCols[i] != self.yCols[j]:
+                    # subtract bias bc filters don't need to be mean zero
+                    curr_filt = K[(i, j)].reshape((1, -1)) - self.K_b[(i, j)]
+                    conv_res = T.signal.conv.conv2d(curr_filt, self.S.reshape((1, -1)),
+                                                    border_mode='full')[:, 1:-1]
+                    LogDensity -= (0.5 * (curr_filt * conv_res).sum()) / self.ntrials
 
         det_t = sym_tridiag_det(self.theta, self.phi,
                                 int(self.p))
@@ -978,9 +971,9 @@ class GPLDS2(GenerativeModel):
         Return parameters of the GenerativeModel.
         '''
         rets = self.K_mu.values() + [self.a] + [self.b] + self.c.values()
-        rets += self.d.values() + self.K_b.values()  # + [self.vel]
+        rets += self.d.values() + self.K_b.values() + [self.vel]
         rets += list(self.A) + list(self.QChol) + list(self.Q0Chol)
-        rets += list(self.x0)  # + [self.RChol]
+        rets += list(self.x0) + [self.RChol]
         return rets
 
 
