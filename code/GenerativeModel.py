@@ -777,12 +777,13 @@ class GPLDS2(GenerativeModel):
         else:
             self.p = 10.0
         # learnable velocity for each observation dimension
-        if 'vel' in GenerativeParams:
-            self.vel = theano.shared(value=GenerativeParams['vel'], name='vel',
+        if 'log_vel' in GenerativeParams:
+            self.log_vel = theano.shared(value=GenerativeParams['log_vel'], name='log_vel',
                                      borrow=True)
         else:
-            self.vel = theano.shared(value=np.ones(self.yDim), name='vel',
+            self.log_vel = theano.shared(value=np.ones(self.yDim), name='log_vel',
                                      borrow=True)
+        self.vel = T.exp(self.log_vel)
         if 'yCols' in GenerativeParams:
             self.yCols = GenerativeParams['yCols']
         else:
@@ -858,12 +859,12 @@ class GPLDS2(GenerativeModel):
         """
         curr_x = T.horizontal_stack(curr_xg, curr_xb)
 
-        Y_pred = self.getYPred(curr_x, curr_y, K)[-1]
-        Y_pred += T.dot(self.srng.normal((self.yDim,)),
+        dY = self.get_dY(curr_x, curr_y, K)[-1]
+        dY += T.dot(self.srng.normal((self.yDim,)),
                         T.diag(self.RChol).T)  # noise
-        return Y_pred
+        return dY + curr_y[-1]
 
-    def getYPred(self, X, Y_true, K, pad=None):
+    def get_dY(self, X, Y_true, K, pad=None):
         if pad is not None:
             Y_pad = T.vertical_stack(pad, Y_true)
         else:
@@ -876,21 +877,20 @@ class GPLDS2(GenerativeModel):
             for i in range(self.yDim):  # from
                 if self.yCols[i] != self.yCols[j]:
                     split_in = self.split_data(Y_pad, i)
-                    error[j] -= (split_in * K[(i, j)]).sum(axis=1)  # subtract external dynamics
+                    error[j] += (split_in * K[(i, j)]).sum(axis=1)  # add external dynamics
         error = T.stack(error, axis=1)
-        error -= X  # subtract internal dynamics
-        error += Y_true  # add position to get error (position - setpoint)
+        error += X  # add internal dynamics
+        error -= Y_true  # subtract position to get error (setpoint - position)
         pad = T.zeros((self.filter_size - 1, self.yDim))
         error_pad = T.vertical_stack(pad, error)
-        Y_pred = []
+        dY = []
         for i in range(self.yDim):
             split_in = self.split_data(error_pad, i)
-            Y_pred.append((split_in * K[(i, i)]).sum(axis=1))  # smooth errors
-        Y_pred = T.stack(Y_pred, axis=1)
-        Y_pred = T.tanh(Y_pred)
-        Y_pred = self.vel.reshape((1, self.yDim)) * Y_pred
-        Y_pred += Y_true  # add previous observation
-        return Y_pred
+            dY.append((split_in * K[(i, i)]).sum(axis=1))  # smooth errors
+        dY = T.stack(dY, axis=1)
+        dY = T.tanh(dY)
+        dY = self.vel.reshape((1, self.yDim)) * dY
+        return dY
 
     def fit_trial(self, Xg, Xb, Y_true):
         '''
@@ -902,8 +902,8 @@ class GPLDS2(GenerativeModel):
         pad = np.zeros((self.filter_size.eval() - 1, self.yDim))
         pad[:, 1] = 0.2
         pad = theano.shared(value=pad)
-        Y_pred = self.getYPred(X, Y_true, K, pad=pad)[:-1]
-        return Y_pred
+        dY = self.get_dY(X, Y_true, K, pad=pad)[:-1]
+        return dY + Y_true[:-1]
 
     def evaluateLogDensity(self, Xg, Xb, Y_true):
         '''
@@ -915,8 +915,8 @@ class GPLDS2(GenerativeModel):
         pad = np.zeros((self.filter_size.eval() - 1, self.yDim))
         pad[:, 1] = 0.2
         pad = theano.shared(value=pad)
-        Y_pred = self.getYPred(X, Y_true, K, pad=pad)[:-1]
-        resY = Y_true[1:] - Y_pred  # get errors for each point
+        dY = self.get_dY(X, Y_true, K, pad=pad)[:-1]
+        resY = (Y_true[1:] - Y_true[:-1]) - dY  # get errors for each residual
 
         LogDensity = -(0.5*T.dot(resY.T,resY)*T.diag(self.Rinv)).sum()
         LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y_true.shape[0] - 0.5*(self.yDim)*np.log(2*np.pi)*Y_true.shape[0]
@@ -971,7 +971,7 @@ class GPLDS2(GenerativeModel):
         Return parameters of the GenerativeModel.
         '''
         rets = self.K_mu.values() + [self.a] + [self.b] + self.c.values()
-        rets += self.d.values() + self.K_b.values() + [self.vel]
+        rets += self.d.values() + self.K_b.values() + [self.log_vel]
         rets += list(self.A) + list(self.QChol) + list(self.Q0Chol)
         rets += list(self.x0) + [self.RChol]
         return rets
