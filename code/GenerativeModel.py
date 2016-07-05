@@ -715,14 +715,14 @@ class GPLDS():
 
 class GPLDS2(GenerativeModel):
     """
-    Same as GPLDS but with latents (separate for ball and goalie).
+    Same as GPLDS but with optional latents (separate for ball and goalie).
     All variables pertaining to latents (A, QChol, Q0Chol, Lambda, etc.) are
     2 element tuples w/ the first element being for the goalie and second for
     the shooter.
     """
-    def __init__(self, GenerativeParams, xDim, yDim, ntrials, srng=None, nrng=None):
+    def __init__(self, GenerativeParams, xDim, yDim, ntrials, srng=None, nrng=None, noX=False):
         super(GPLDS2, self).__init__(GenerativeParams, xDim, yDim, srng, nrng)
-
+        self.noX = noX
         self.ntrials = ntrials
 
         # dynamics matrix
@@ -857,7 +857,10 @@ class GPLDS2(GenerativeModel):
         """
         Return predicted next data point based on given point
         """
-        curr_x = T.horizontal_stack(curr_xg, curr_xb)
+        if not self.noX:
+            curr_x = T.horizontal_stack(curr_xg, curr_xb)
+        else:
+            curr_x = None
 
         dY = self.get_dY(curr_x, curr_y, K)[-1]
         dY += T.dot(self.srng.normal((self.yDim,)),
@@ -870,7 +873,8 @@ class GPLDS2(GenerativeModel):
         else:
             Y_pad = Y_true.copy()
             Y_true = Y_true[self.filter_size - 1:]
-            X = X[self.filter_size - 1:]
+            if X is not None:
+                X = X[self.filter_size - 1:]
         error = []
         for j in range(self.yDim):  # to
             error.append(T.zeros((Y_true.shape[0],)))
@@ -879,7 +883,8 @@ class GPLDS2(GenerativeModel):
                     split_in = self.split_data(Y_pad, i)
                     error[j] += (split_in * K[(i, j)]).sum(axis=1)  # add external dynamics
         error = T.stack(error, axis=1)
-        error += X  # add internal dynamics
+        if X is not None:
+            error += X  # add internal dynamics
         error -= Y_true  # subtract position to get error (setpoint - position)
         pad = T.zeros((self.filter_size - 1, self.yDim))
         error_pad = T.vertical_stack(pad, error)
@@ -897,7 +902,10 @@ class GPLDS2(GenerativeModel):
         Return a theano function that calculates a fit for the given data.
         '''
         K = self.sample_K()
-        X = T.horizontal_stack(Xg, Xb)
+        if not self.noX:
+            X = T.horizontal_stack(Xg, Xb)
+        else:
+            X = None
 
         pad = np.zeros((self.filter_size.eval() - 1, self.yDim))
         pad[:, 1] = 0.2
@@ -910,7 +918,10 @@ class GPLDS2(GenerativeModel):
         Return a theano function that evaluates the density of the GenerativeModel.
         '''
         K = self.sample_K()
-        X = T.horizontal_stack(Xg, Xb)
+        if not self.noX:
+            X = T.horizontal_stack(Xg, Xb)
+        else:
+            X = None
 
         pad = np.zeros((self.filter_size.eval() - 1, self.yDim))
         pad[:, 1] = 0.2
@@ -929,7 +940,8 @@ class GPLDS2(GenerativeModel):
             LD = (-(0.5 * T.dot(resX.T, resX) * self.Lambda[i]).sum() -
                   0.5 * T.dot(T.dot(resX0, self.Lambda0[i]), resX0.T))
             return LD
-        LogDensity += get_X_LogDensity(Xg, 0) + get_X_LogDensity(Xb, 1)
+        if X is not None:
+            LogDensity += get_X_LogDensity(Xg, 0) + get_X_LogDensity(Xb, 1)
 
         def sym_tridiag_det(a, b, length):
             """
@@ -971,9 +983,10 @@ class GPLDS2(GenerativeModel):
         Return parameters of the GenerativeModel.
         '''
         rets = self.K_mu.values() + [self.a] + [self.b] + self.c.values()
-        rets += self.d.values() + self.K_b.values() + [self.log_vel]
-        rets += list(self.A) + list(self.QChol) + list(self.Q0Chol)
-        rets += list(self.x0) + [self.RChol]
+        rets += self.d.values() + self.K_b.values() + [self.log_vel] + [self.RChol]
+        if not self.noX:
+            rets += list(self.A) + list(self.QChol) + list(self.Q0Chol)
+            rets += list(self.x0)
         return rets
 
 

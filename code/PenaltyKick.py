@@ -401,7 +401,8 @@ class SGVB_PK_GP2():#(Trainable):
                  rec_params_goalie, # dictionary of approximate posterior ("recognition model") parameters
                  rec_params_ball, # dictionary of approximate posterior ("recognition model") parameters
                  REC_MODEL,
-                 ntrials  # total number of trials in training set
+                 ntrials,  # total number of trials in training set
+                 noX=False
                  ):
 
         # instantiate rng's
@@ -410,6 +411,7 @@ class SGVB_PK_GP2():#(Trainable):
 
         #---------------------------------------------------------
         ## actual model parameters
+        self.noX = noX
         self.X, self.Y = T.matrices('X', 'Y')   # symbolic variables for the data
 
         self.xDim_goalie = xDim_goalie
@@ -417,18 +419,21 @@ class SGVB_PK_GP2():#(Trainable):
         self.yDim = yDim
 
         # instantiate our prior and recognition models
-        self.mrec_goalie = REC_MODEL(rec_params_goalie, self.Y,
-                                     self.xDim_goalie, self.yDim,
-                                     self.srng, self.nrng)
-        self.mrec_ball = REC_MODEL(rec_params_ball, self.Y,
-                                   self.xDim_ball, self.yDim,
-                                   self.srng, self.nrng)
+        if not self.noX:
+            self.mrec_goalie = REC_MODEL(rec_params_goalie, self.Y,
+                                         self.xDim_goalie, self.yDim,
+                                         self.srng, self.nrng)
+            self.mrec_ball = REC_MODEL(rec_params_ball, self.Y,
+                                       self.xDim_ball, self.yDim,
+                                       self.srng, self.nrng)
+            self.isTrainingRecognitionModel = True
+        else:
+            self.isTrainingRecognitionModel = False
         self.mprior = GEN_MODEL(gen_params, (self.xDim_goalie, self.xDim_ball),
                                 self.yDim, ntrials, srng=self.srng,
-                                nrng=self.nrng)
+                                nrng=self.nrng, noX=noX)
 
         self.isTrainingGenerativeModel = True
-        self.isTrainingRecognitionModel = True
 
     def getParams(self):
         '''
@@ -460,12 +465,16 @@ class SGVB_PK_GP2():#(Trainable):
         '''
         Compute a one-sample approximation the ELBO (lower bound on marginal likelihood), normalized by batch size (length of Y in first dimension).
         '''
-        qg = self.mrec_goalie.getSample()
-        qb = self.mrec_ball.getSample()
+        if not self.noX:
+            qg = self.mrec_goalie.getSample()
+            qb = self.mrec_ball.getSample()
+            thelik = self.mprior.evaluateLogDensity(qg, qb, self.Y)
+            theentropy = self.mrec_goalie.evalEntropy() + self.mrec_ball.evalEntropy()
+        else:
+            thelik = self.mprior.evaluateLogDensity(None, None, self.Y)
+            theentropy = 0
 
-        theentropy = self.mrec_goalie.evalEntropy() + self.mrec_ball.evalEntropy()
         theentropy += self.mprior.evalEntropy()
-        thelik = self.mprior.evaluateLogDensity(qg, qb, self.Y)
 
         thecost = thelik + theentropy
 
