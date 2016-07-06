@@ -789,6 +789,15 @@ class GPLDS2(GenerativeModel):
         else:
             self.yCols = [0, 1, 1]
 
+        # Number of time steps forward to make prediction in loss function
+        # Using a large number here forces predictions to be more accurate
+        # than simply estimating the current velocity and using that as the
+        # next velocity
+        if 'forward' in GenerativeParams:
+            self.forward = GenerativeParams['forward']
+        else:
+            self.forward = 5
+
         # create constrained parameters from uncontrained a, b
         self.theta = T.exp(self.a)
         self.phi = (self.theta / 2) * T.cos(np.pi / (self.p + 1)) * T.nnet.sigmoid(self.b)
@@ -862,12 +871,12 @@ class GPLDS2(GenerativeModel):
         else:
             curr_x = None
 
-        dY = self.get_dY(curr_x, curr_y, K)[-1]
-        dY += T.dot(self.srng.normal((self.yDim,)),
-                        T.diag(self.RChol).T)  # noise
-        return dY + curr_y[-1]
+        Ypred = self.get_Ypred(curr_x, curr_y, K)[-1]
+        Ypred += T.dot(self.srng.normal((self.yDim,)),
+                       T.diag(self.RChol).T)  # noise
+        return Ypred
 
-    def get_dY(self, X, Y_true, K, pad=None):
+    def get_Ypred(self, X, Y_true, K, pad=None):
         if pad is not None:
             Y_pad = T.vertical_stack(pad, Y_true)
         else:
@@ -888,14 +897,15 @@ class GPLDS2(GenerativeModel):
         error -= Y_true  # subtract position to get error (setpoint - position)
         pad = T.zeros((self.filter_size - 1, self.yDim))
         error_pad = T.vertical_stack(pad, error)
-        dY = []
+        Ypred = []
         for i in range(self.yDim):
             split_in = self.split_data(error_pad, i)
-            dY.append((split_in * K[(i, i)]).sum(axis=1))  # smooth errors
-        dY = T.stack(dY, axis=1)
-        dY = T.tanh(dY)
-        dY = self.vel.reshape((1, self.yDim)) * dY
-        return dY
+            Ypred.append((split_in * K[(i, i)]).sum(axis=1))  # smooth errors
+        Ypred = T.stack(Ypred, axis=1)
+        Ypred = T.tanh(Ypred)
+        Ypred = self.vel.reshape((1, self.yDim)) * Ypred
+        Ypred += Y_true
+        return Ypred
 
     def fit_trial(self, Xg, Xb, Y_true):
         '''
@@ -910,8 +920,8 @@ class GPLDS2(GenerativeModel):
         pad = np.zeros((self.filter_size.eval() - 1, self.yDim))
         pad[:, 1] = 0.2
         pad = theano.shared(value=pad)
-        dY = self.get_dY(X, Y_true, K, pad=pad)[:-1]
-        return dY + Y_true[:-1]
+        Ypred = self.get_Ypred(X, Y_true, K, pad=pad)[:-1]
+        return Ypred
 
     def evaluateLogDensity(self, Xg, Xb, Y_true):
         '''
@@ -923,14 +933,18 @@ class GPLDS2(GenerativeModel):
         else:
             X = None
 
-        pad = np.zeros((self.filter_size.eval() - 1, self.yDim))
-        pad[:, 1] = 0.2
-        pad = theano.shared(value=pad)
-        dY = self.get_dY(X, Y_true, K, pad=pad)[:-1]
-        resY = (Y_true[1:] - Y_true[:-1]) - dY  # get errors for each residual
+        curr_Y = Y_true.copy()
+        for i in range(self.forward):
+            pad = [curr_Y[0, :].copy()] * (self.filter_size.eval() - 1)
+            pad = T.stack(pad, axis=0)
 
-        LogDensity = -(0.5*T.dot(resY.T,resY)*T.diag(self.Rinv)).sum()
-        LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y_true.shape[0] - 0.5*(self.yDim)*np.log(2*np.pi)*Y_true.shape[0]
+            Ypred = self.get_Ypred(X, curr_Y, K, pad=pad)[:-1]
+            resY = Y_true[i + 1:] - Ypred  # get errors for each residual
+
+            LogDensity = -(0.5*T.dot(resY.T,resY)*T.diag(self.Rinv)).sum()
+            LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y_true.shape[0] - 0.5*(self.yDim)*np.log(2*np.pi)*Y_true.shape[0]
+
+            curr_Y = Ypred
 
         def get_X_LogDensity(X, i):
             curr_X = X[1:, :]
