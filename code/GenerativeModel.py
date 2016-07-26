@@ -1035,6 +1035,129 @@ class GPLDS2(GenerativeModel):
         return rets
 
 
+class NLDS(GenerativeModel):
+    """
+    Non-Linear Dynamical System
+    """
+    def __init__(self, GenerativeParams, xDim, yDim, srng=None, nrng=None):
+        super(NLDS, self).__init__(GenerativeParams, xDim, yDim, srng, nrng)
+
+        # dynamics matrix
+        self.A = theano.shared(value=np.diag(np.ones(xDim).astype(theano.config.floatX)), name='A', borrow=True)
+        # cholesky of innovation cov matrix
+        self.QChol_diag = theano.shared(value=(np.ones(xDim)).astype(theano.config.floatX), name='QChol_diag', borrow=True)
+        self.QChol = T.diag(self.QChol_diag)
+        # cholesky of starting distribution cov matrix
+        self.Q0Chol_diag = theano.shared(value=(np.ones(xDim)).astype(theano.config.floatX), name='Q0Chol_diag', borrow=True)
+        self.Q0Chol = T.diag(self.Q0Chol_diag)
+        # set to zero for stationary distribution
+        self.x0 = theano.shared(value=np.zeros((xDim,)).astype(theano.config.floatX), name='x0', borrow=True)
+        # cholesky of observation noise cov matrix
+        if 'RChol' in GenerativeParams:
+            self.RChol = theano.shared(value=GenerativeParams['RChol'].astype(theano.config.floatX), name='RChol', borrow=True)
+        else:
+            self.RChol = theano.shared(value=np.random.randn(yDim).astype(theano.config.floatX) / 10, name='RChol', borrow=True)
+
+        # we assume diagonal covariance (RChol is a vector)
+        self.Rinv = 1. / (self.RChol**2)  #Tla.matrix_inverse(T.dot(self.RChol ,T.transpose(self.RChol)))
+        invert = lambda mat: Tla.matrix_inverse(T.dot(mat, mat.T))
+        self.Lambda = invert(self.QChol)
+        self.Lambda0 = invert(self.Q0Chol)
+
+        self.K = theano.shared(value=np.eye(self.yDim).astype(theano.config.floatX), name='K', borrow=True)
+
+        # learnable velocity for each observation dimension
+        if 'log_vel' in GenerativeParams:
+            self.log_vel = theano.shared(value=GenerativeParams['log_vel'].astype(theano.config.floatX),
+                                         name='log_vel', borrow=True)
+        else:
+            self.log_vel = theano.shared(value=np.ones(self.yDim).astype(theano.config.floatX),
+                                         name='log_vel', borrow=True)
+        self.vel = T.exp(self.log_vel)
+
+        if 'yCols' in GenerativeParams:
+            self.yCols = GenerativeParams['yCols']
+        else:
+            self.yCols = [0, 1, 1]
+
+        # noise penalty constant
+        if 'p' in GenerativeParams:
+            self.p = theano.shared(value=np.cast[theano.config.floatX](GenerativeParams['p']), name='p', borrow=True)
+        else:
+            self.p = theano.shared(value=np.cast[theano.config.floatX](1000), name='p', borrow=True)
+
+    def getNextState(self, curr_x, curr_y):
+        """
+        Return predicted next data point based on given data
+        """
+        Upred, Ypred = self.get_UYpred(curr_x, curr_y, noise=True)
+        Ypred = Ypred[-1]
+        return Ypred
+
+    def get_UYpred(self, X, Y_true, noise=False):
+        def updateU(Y, X):
+            U_next = self.K.dot(Y) + X
+            return U_next
+
+        U, _ = theano.scan(fn=updateU,
+                           outputs_info=None,
+                           sequences=[Y_true, X])
+
+        if noise:
+            U += T.dot(self.srng.normal((self.yDim,)),
+                       T.diag(self.RChol).T)
+
+        Y_pred = Y_true + self.vel.reshape((1, self.yDim)) * T.tanh(U)
+
+        return U, Y_pred
+
+    def fit_trial(self, X, Y_true):
+        '''
+        Return a theano function that calculates a fit for the given data.
+        '''
+        Upred, Ypred = self.get_UYpred(X, Y_true)
+        return Ypred[:-1]
+
+    def evaluateLogDensity(self, X, Y_true):
+        '''
+        Return a theano function that evaluates the log-density of the GenerativeModel.
+        '''
+        Upred, Ypred = self.get_UYpred(X, Y_true)
+        Upred = Upred[:-1]
+        Ypred = Ypred[:-1]
+        # resY = Y_true[1:] - Ypred  # get errors for each residual
+        U_true = T.arctanh((Y_true[1:] - Y_true[:-1]) / self.vel.reshape((1, self.yDim)))
+        resU = U_true - Upred
+
+        # LogDensity = -(0.5*T.dot(resY.T,resY)*T.diag(self.Rinv)).sum()
+        LogDensity = -(0.5*T.dot(resU.T,resU)*T.diag(self.Rinv)).sum()
+        LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y_true.shape[0] - 0.5*(self.yDim)*np.log(2*np.pi)*Y_true.shape[0]
+
+        curr_X = X[1:, :]
+        Xpred = T.dot(X[:-1], self.A)
+        resX = curr_X - Xpred
+        resX0 = X[0] - self.x0
+        LogDensity += (-(0.5 * T.dot(resX.T, resX) * self.Lambda).sum() -
+                       0.5 * T.dot(T.dot(resX0, self.Lambda0), resX0.T))
+
+        # noise penalties
+        LogDensity += self.p * (self.Rinv).sum()
+        LogDensity += self.p * (self.Lambda).sum()
+        LogDensity += self.p * (self.Lambda0).sum()
+
+        return LogDensity
+
+    def getParams(self):
+        '''
+        Return parameters of the GenerativeModel.
+        '''
+        rets = [self.RChol] + [self.K]
+        # rets += [self.log_vel] + [self.A]
+        rets += [self.QChol_diag] + [self.Q0Chol_diag]
+        rets += [self.x0]
+        return rets
+
+
 class PLDS(LDS):
     '''
     Gaussian linear dynamical system with Poisson count observations. Inherits Gaussian
