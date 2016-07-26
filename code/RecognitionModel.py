@@ -142,6 +142,11 @@ class SmoothingLDSTimeSeries(RecognitionModel):
         self.Qinv  = T.dot(self.QinvChol,self.QinvChol.T)
         self.Q0inv = T.dot(self.Q0invChol,self.Q0invChol.T)
 
+        if 'p' in RecognitionParams:
+            self.p = theano.shared(value=np.cast[theano.config.floatX](RecognitionParams['p']), name='p')
+        else:
+            self.p = None
+
         ################## put together the total precision matrix ######################
 
         AQinvA = T.dot(T.dot(self.A.T, self.Qinv), self.A)
@@ -183,7 +188,11 @@ class SmoothingLDSTimeSeries(RecognitionModel):
         return self.postX + blk_chol_inv(self.the_chol[0], self.the_chol[1], normSamps, lower=False, transpose=True)
 
     def evalEntropy(self): # we want it to be smooth, this is a prior on being smooth...
-        return self.ln_determinant/2 + self.xDim*self.Tt/2.0*(1+np.log(2*np.pi))
+        entropy = self.ln_determinant/2 + self.xDim*self.Tt/2.0*(1+np.log(2*np.pi))
+        if self.p is not None:  # penalize noise
+            entropy += self.p * (self.Qinv).sum()
+            entropy += self.p * (self.Q0inv).sum()
+        return entropy
 
     def getDynParams(self):
         return [self.A]+[self.QinvChol]+[self.Q0invChol]
