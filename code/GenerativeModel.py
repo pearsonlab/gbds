@@ -1142,8 +1142,8 @@ class NLDS(GenerativeModel):
 
         # noise penalties
         LogDensity += self.p * (self.Rinv).sum()
-        LogDensity += self.p * (self.Lambda).sum()
-        LogDensity += self.p * (self.Lambda0).sum()
+        LogDensity += self.p * T.abs_(self.Lambda).sum()
+        LogDensity += self.p * T.abs_(self.Lambda0).sum()
 
         return LogDensity
 
