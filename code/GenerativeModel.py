@@ -1042,6 +1042,8 @@ class NLDS(GenerativeModel):
     def __init__(self, GenerativeParams, xDim, yDim, srng=None, nrng=None):
         super(NLDS, self).__init__(GenerativeParams, xDim, yDim, srng, nrng)
 
+        self.ntrials = np.cast[theano.config.floatX](GenerativeParams['ntrials'])
+        self.filter_size = GenerativeParams['filter_size']
         # dynamics matrix
         self.A = theano.shared(value=np.diag(np.ones(xDim).astype(theano.config.floatX)), name='A', borrow=True)
         # cholesky of innovation cov matrix
@@ -1064,8 +1066,6 @@ class NLDS(GenerativeModel):
         self.Lambda = invert(self.QChol)
         self.Lambda0 = invert(self.Q0Chol)
 
-        self.K = theano.shared(value=np.eye(self.yDim).astype(theano.config.floatX), name='K', borrow=True)
-
         # learnable velocity for each observation dimension
         if 'log_vel' in GenerativeParams:
             self.log_vel = theano.shared(value=GenerativeParams['log_vel'].astype(theano.config.floatX),
@@ -1086,28 +1086,106 @@ class NLDS(GenerativeModel):
         else:
             self.p = theano.shared(value=np.cast[theano.config.floatX](1000), name='p', borrow=True)
 
-    def getNextState(self, curr_x, curr_y):
+        # a, b, c, and d are unconstrained scalars that will form our contrained
+        # S matrix
+        if 'a' in GenerativeParams:
+            self.a = theano.shared(value=np.cast[theano.config.floatX](GenerativeParams['a']), name='a',
+                                   borrow=True)
+        else:
+            self.a = theano.shared(value=np.cast[theano.config.floatX](1.0), name='a',
+                                   borrow=True)
+        if 'b' in GenerativeParams:
+            self.b = theano.shared(value=np.cast[theano.config.floatX](GenerativeParams['b']), name='b',
+                                   borrow=True)
+        else:
+            self.b = theano.shared(value=np.cast[theano.config.floatX](0.0), name='b',
+                                   borrow=True)
+
+        # create constrained parameters from uncontrained a, b
+        self.theta = T.exp(self.a)
+        self.phi = (self.theta / 2) * T.cos(np.pi / (self.p + 1)) * T.nnet.sigmoid(self.b)
+        self.S = T.stack((self.phi, self.theta, self.phi), axis=0)
+
+        self.c = {}  # unconstrained diagonals
+        self.d = {}  # unconstrained lower triangle
+        self.L = {}  # combined constrained L matrix
+        self.K_mu = {}  # mean filters
+        self.K_b = theano.shared(value=np.zeros((self.yDim, 1, self.yDim)).astype(theano.config.floatX),
+                                 name='K_b', borrow=True,
+                                 broadcastable=[False, True, False])
+
+        for i in range(self.yDim):
+            for j in range(self.yDim):
+                filter_size = self.filter_size
+                self.K_mu[(i, j)] = theano.shared(value=0.05 * np.random.randn(filter_size)
+                                                  .astype(theano.config.floatX),
+                                                  name='K_mu_%ito%i' % (i, j), borrow=True)
+                self.c[(i, j)] = theano.shared(value=(-2 * np.ones(filter_size))
+                                               .astype(theano.config.floatX),
+                                               name='c_%ito%i' % (i, j), borrow=True)
+                self.d[(i, j)] = theano.shared(value=np.zeros((filter_size, filter_size))
+                                               .astype(theano.config.floatX),
+                                               name='d_%ito%i' % (i, j), borrow=True)
+                Ldiag = T.exp(self.c[(i, j)])  # diagonal must be positive
+                self.L[(i, j)] = T.tril(self.d[(i, j)], k=-1) + T.diag(Ldiag)
+
+    def sample_K(self):
+        """
+        Obtain a sample filter, K (shape = (yDim, filter_size, yDim)),
+        from the gaussian distribution
+        """
+        K = []
+        for j in range(self.yDim):  # to
+            curr_filt = []
+            for i in range(self.yDim):  # from
+                curr_K = (self.K_mu[(i, j)] +
+                          self.L[(i, j)].dot(
+                          self.srng.normal((self.filter_size,))))
+                curr_filt.append(curr_K)
+            curr_filt = T.stack(curr_filt, axis=1)
+            K.append(curr_filt)
+        K = T.stack(K, axis=0)
+
+        return K
+
+    def evalEntropy(self):
+        """
+        Return the entropy term for K in the ELBO
+        """
+        entropy = 0
+        for i in range(self.yDim):
+            for j in range(self.yDim):
+                Ldiag = T.diag(self.L[(i, j)])
+                entropy += (self.filter_size / 2.0) * (1 + T.log(2 * np.pi))
+                entropy += T.log(Ldiag).sum()
+        entropy /= self.ntrials
+        return entropy
+
+    def getNextState(self, K, curr_x, curr_y):
         """
         Return predicted next data point based on given data
         """
-        Upred, Ypred = self.get_UYpred(curr_x, curr_y, noise=True)
+        Upred, Ypred = self.get_UYpred(K, curr_x, curr_y, noise=True)
         Ypred = Ypred[-1]
         return Ypred
 
-    def get_UYpred(self, X, Y_true, noise=False):
-        def updateU(Y, X):
-            U_next = self.K.dot(Y) + X
-            return U_next
+    def get_UYpred(self, K, X, Y, noise=False, pad=True):
+        """
+        Return the predicted U and Y for each point in Y.
+        """
+        if pad:
+            pad = T.stack([Y[0]] * (self.filter_size - 1), axis=0)
+            Y_pad = T.vertical_stack(pad, Y)
 
-        U, _ = theano.scan(fn=updateU,
-                           outputs_info=None,
-                           sequences=[Y_true, X])
+        U = T.signal.conv.conv2d(Y_pad, K[:, ::-1, ::-1],
+                                 border_mode='valid').reshape((self.yDim, -1)).T
+        U += X
 
         if noise:
             U += T.dot(self.srng.normal((self.yDim,)),
                        T.diag(self.RChol).T)
 
-        Y_pred = Y_true + self.vel.reshape((1, self.yDim)) * T.tanh(U)
+        Y_pred = Y + self.vel.reshape((1, self.yDim)) * T.tanh(U)
 
         return U, Y_pred
 
@@ -1115,14 +1193,17 @@ class NLDS(GenerativeModel):
         '''
         Return a theano function that calculates a fit for the given data.
         '''
-        Upred, Ypred = self.get_UYpred(X, Y_true)
+        K = self.sample_K()
+        Upred, Ypred = self.get_UYpred(K, X, Y_true)
         return Ypred[:-1]
 
     def evaluateLogDensity(self, X, Y_true):
         '''
-        Return a theano function that evaluates the log-density of the GenerativeModel.
+        Return a theano function that evaluates the log-density of the
+        GenerativeModel.
         '''
-        Upred, Ypred = self.get_UYpred(X, Y_true)
+        K = self.sample_K()
+        Upred, Ypred = self.get_UYpred(K, X, Y_true)
         Upred = Upred[:-1]
         Ypred = Ypred[:-1]
         # resY = Y_true[1:] - Ypred  # get errors for each residual
@@ -1145,13 +1226,45 @@ class NLDS(GenerativeModel):
         LogDensity += self.p * T.abs_(self.Lambda).sum()
         LogDensity += self.p * T.abs_(self.Lambda0).sum()
 
-        return LogDensity
+        def sym_tridiag_det(a, b, length):
+            """
+            Computes the determinant of a symmetric tridiagonal
+            matrix with repeating diagonals
+
+            https://en.wikipedia.org/wiki/Tridiagonal_matrix#Determinant
+
+            a (float): value of center diagonal
+            b (float): value of up-1 and down-1 diagonals
+            length (int): length of center diagonal
+            """
+            f_lag = 0.0
+            f = 1.0
+            for i in xrange(length):
+                f_next = a * f - (b**2) * f_lag
+                f_lag = f
+                f = f_next
+            return f
+
+        filt = K - self.K_b
+        conv_res = T.signal.conv.conv2d(filt, self.S.reshape((-1, 1)),
+                                        border_mode='full')[:, 1:-1, :]
+        LogDensity -= (0.5 * (filt * conv_res).sum()) / self.ntrials
+
+        det_t = sym_tridiag_det(self.theta, self.phi,
+                                self.filter_size)
+
+        LogDensity += ((0.5 * T.log(T.abs_(det_t))) *
+                       (self.yDim**2 / self.ntrials))
+
+        return LogDensity + self.evalEntropy()
 
     def getParams(self):
         '''
         Return parameters of the GenerativeModel.
         '''
-        rets = [self.RChol] + [self.K]
+        rets = self.K_mu.values() + [self.a] + [self.b] + self.c.values()
+        rets += self.d.values() + [self.K_b]
+        rets += [self.RChol]
         # rets += [self.log_vel] + [self.A]
         rets += [self.QChol_diag] + [self.Q0Chol_diag]
         rets += [self.x0]
