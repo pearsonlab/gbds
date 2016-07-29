@@ -479,3 +479,106 @@ class SGVB_PK_GP2():#(Trainable):
         thecost = thelik + theentropy
 
         return thecost / self.Y.shape[0]
+
+
+class SGVB_NN():#(Trainable):
+    '''
+    This class fits a model to PenaltyKick data.
+
+    Inputs:
+    gen_params       - Dictionary of parameters that define the chosen GenerativeModel
+    GEN_MODEL        - A class that inhereits from the GenerativeModel abstract class
+    yDim             - Integer that specifies the dimensionality of the observations
+
+    --------------------------------------------------------------------------
+
+    The SGVB ("Stochastic Gradient Variational Bayes") inference technique is described
+    in the following publications:
+    * Auto-Encoding Variational Bayes
+           - Kingma, Welling (ICLR, 2014)
+    * Stochastic backpropagation and approximate inference in deep generative models.
+           - Rezende et al (ICML, 2014)
+    * Doubly stochastic variational bayes for non-conjugate inference.
+           - Titsias and Lazaro-Gredilla (ICML, 2014)
+    '''
+    def __init__(self,
+                 gen_params_ball,  # dictionary of generative model parameters
+                 gen_params_goalie,  # dictionary of generative model parameters
+                 GEN_MODEL,  # class that inherits from GenerativeModel
+                 yDim_ball,  # number of observation dimensions
+                 yDim_goalie,  # number of observation dimensions
+                 rec_params_ball, # dictionary of approximate posterior ("recognition model") parameters
+                 rec_params_goalie, # dictionary of approximate posterior ("recognition model") parameters
+                 REC_MODEL):
+
+        # instantiate rng's
+        self.srng = RandomStreams(seed=234)
+        self.nrng = np.random.RandomState(124)
+
+        #---------------------------------------------------------
+        ## actual model parameters
+        self.X, self.Y = T.matrices('X', 'Y')   # symbolic variables for the data
+
+        self.yDim_goalie = yDim_goalie
+        self.yDim_ball = yDim_ball
+        self.xDim_goalie = yDim_goalie
+        self.xDim_ball = yDim_ball
+        self.yDim = self.yDim_goalie + self.yDim_ball
+
+        # instantiate our prior and recognition models
+        self.mrec_goalie = REC_MODEL(rec_params_goalie, self.Y,
+                                     self.xDim_goalie, self.yDim,
+                                     self.srng, self.nrng)
+        self.mrec_ball = REC_MODEL(rec_params_ball, self.Y,
+                                   self.xDim_ball, self.yDim,
+                                   self.srng, self.nrng)
+        self.mprior_goalie = GEN_MODEL(gen_params_goalie, self.xDim_goalie,
+                                       self.yDim_goalie, self.yDim,
+                                       srng=self.srng, nrng=self.nrng)
+        self.mprior_ball = GEN_MODEL(gen_params_ball, self.xDim_ball,
+                                     self.yDim_ball, self.yDim,
+                                     srng=self.srng, nrng=self.nrng)
+
+        self.isTrainingGenerativeModel = True
+        self.isTrainingRecognitionModel = True
+
+    def getParams(self):
+        '''
+        Return Generative and Recognition Model parameters that are currently being trained.
+        '''
+        params = []
+        if self.isTrainingRecognitionModel:
+            params += self.mrec_goalie.getParams()
+            params += self.mrec_ball.getParams()
+        if self.isTrainingGenerativeModel:
+            params += self.mprior_goalie.getParams()
+            params += self.mprior_ball.getParams()
+        return params
+
+    def EnableGenerativeModelTraining(self):
+        '''
+        Enable training of GenerativeModel parameters.
+        '''
+        self.isTrainingGenerativeModel = True
+        print('Enable switching training/test mode in generative model class!\n')
+
+    def DisableGenerativeModelTraining(self):
+        '''
+        Disable training of GenerativeModel parameters.
+        '''
+        self.isTrainingGenerativeModel = False
+        print('Enable switching training/test mode in generative model class!\n')
+
+    def cost(self):
+        '''
+        Compute a one-sample approximation the ELBO (lower bound on marginal likelihood), normalized by batch size (length of Y in first dimension).
+        '''
+        qg = self.mrec_goalie.getSample()
+        qb = self.mrec_ball.getSample()
+        thelik = self.mprior_goalie.evaluateLogDensity(qg, self.Y)
+        thelik += self.mprior_ball.evaluateLogDensity(qb, self.Y)
+        theentropy = self.mrec_goalie.evalEntropy() + self.mrec_ball.evalEntropy()
+
+        thecost = thelik + theentropy
+
+        return thecost / self.Y.shape[0]
