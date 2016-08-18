@@ -1404,7 +1404,8 @@ class NNLDS(GenerativeModel):
         # rets += [self.log_vel]
         rets += [self.A]
         rets += [self.QChol_diag] + [self.Q0Chol_diag]
-        rets += [self.x0] + [self.RChol]
+        rets += [self.x0]
+        # rets += [self.RChol]
         return rets
 
 
