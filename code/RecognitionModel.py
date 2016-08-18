@@ -190,8 +190,8 @@ class SmoothingLDSTimeSeries(RecognitionModel):
     def evalEntropy(self): # we want it to be smooth, this is a prior on being smooth...
         entropy = self.ln_determinant/2 + self.xDim*self.Tt/2.0*(1+np.log(2*np.pi))
         if self.p is not None:  # penalize noise
-            entropy += self.p * T.abs_(self.Qinv).sum()
-            entropy += self.p * T.abs_(self.Q0inv).sum()
+            entropy += self.p * T.log(T.diag(self.Qinv)).sum()
+            entropy += self.p * T.log(T.diag(self.Q0inv)).sum()
         return entropy
 
     def getDynParams(self):
