@@ -509,7 +509,8 @@ class SGVB_NN():#(Trainable):
                  yDim_goalie,  # number of observation dimensions
                  rec_params_ball, # dictionary of approximate posterior ("recognition model") parameters
                  rec_params_goalie, # dictionary of approximate posterior ("recognition model") parameters
-                 REC_MODEL):
+                 REC_MODEL,
+                 ntrials):
 
         # instantiate rng's
         self.srng = RandomStreams(seed=234)
@@ -518,6 +519,7 @@ class SGVB_NN():#(Trainable):
         #---------------------------------------------------------
         ## actual model parameters
         self.X, self.Y = T.matrices('X', 'Y')   # symbolic variables for the data
+        self.mode = T.ivector('mode')
 
         self.yDim_goalie = yDim_goalie
         self.yDim_ball = yDim_ball
@@ -527,20 +529,28 @@ class SGVB_NN():#(Trainable):
 
         # instantiate our prior and recognition models
         self.mrec_goalie = REC_MODEL(rec_params_goalie, self.Y,
-                                     self.xDim_goalie, self.yDim,
+                                     self.xDim_goalie, self.yDim, ntrials,
                                      self.srng, self.nrng)
         self.mrec_ball = REC_MODEL(rec_params_ball, self.Y,
-                                   self.xDim_ball, self.yDim,
+                                   self.xDim_ball, self.yDim, ntrials,
                                    self.srng, self.nrng)
         self.mprior_goalie = GEN_MODEL(gen_params_goalie, self.xDim_goalie,
-                                       self.yDim_goalie, self.yDim,
+                                       self.yDim_goalie, self.yDim, ntrials,
                                        srng=self.srng, nrng=self.nrng)
         self.mprior_ball = GEN_MODEL(gen_params_ball, self.xDim_ball,
-                                     self.yDim_ball, self.yDim,
+                                     self.yDim_ball, self.yDim, ntrials,
                                      srng=self.srng, nrng=self.nrng)
+
+        self.set_PKbias_mode(self.mode)
 
         self.isTrainingGenerativeModel = True
         self.isTrainingRecognitionModel = True
+
+    def set_PKbias_mode(self, mode):
+        self.mrec_goalie.set_PKbias_mode(mode)
+        self.mrec_ball.set_PKbias_mode(mode)
+        self.mprior_goalie.set_PKbias_mode(mode)
+        self.mprior_ball.set_PKbias_mode(mode)
 
     def getParams(self):
         '''

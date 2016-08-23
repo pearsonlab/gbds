@@ -119,15 +119,29 @@ class SmoothingLDSTimeSeries(RecognitionModel):
 
         # This is the neural network that parameterizes the state mean, mu
         self.NN_Mu = RecognitionParams['NN_Mu']['network']
+        self.PKbias_layers_mu = RecognitionParams['NN_Mu']['PKbias_layers']
         # Mu will automatically be of size [T x xDim]
         self.Mu = lasagne.layers.get_output(self.NN_Mu, inputs = self.Input)
 
         self.NN_Lambda = RecognitionParams['NN_Lambda']['network']
+        self.PKbias_layers_lambda = RecognitionParams['NN_Lambda']['PKbias_layers']
         lambda_net_out = lasagne.layers.get_output(self.NN_Lambda, inputs=self.Input)
         # Lambda will automatically be of size [T x xDim x xDim]
         self.LambdaChol = T.reshape(lambda_net_out, [self.Tt, xDim, xDim]) #+ T.eye(self.xDim)
 
+        # scale parameter for Laplacian prior on PK biases
+        if 'k' in RecognitionParams:
+            self.k = theano.shared(value=np.cast[theano.config.floatX](RecognitionParams['k']), name='k', borrow=True)
+        else:
+            self.k = theano.shared(value=np.cast[theano.config.floatX](1), name='k', borrow=True)
+
         self._initialize_posterior_distribution(RecognitionParams)
+
+    def set_PKbias_mode(self, mode):
+        for pklayer in self.PKbias_layers_mu:
+            pklayer.set_mode(mode)
+        for pklayer in self.PKbias_layers_lambda:
+            pklayer.set_mode(mode)
 
     def _initialize_posterior_distribution(self, RecognitionParams):
 
@@ -192,6 +206,16 @@ class SmoothingLDSTimeSeries(RecognitionModel):
         if self.p is not None:  # penalize noise
             entropy += self.p * T.log(T.diag(self.Qinv)).sum()
             entropy += self.p * T.log(T.diag(self.Q0inv)).sum()
+
+        # prior on PK biases
+        for pklayer in self.PKbias_layers_mu:
+            entropy += (-T.abs_(pklayer.biases) / self.k - T.log(2 * self.k)).sum() / self.ntrials
+            entropy += T.log(pklayer.s).sum() / self.ntrials
+
+        for pklayer in self.PKbias_layers_lambda:
+            entropy += (-T.abs_(pklayer.biases) / self.k - T.log(2 * self.k)).sum() / self.ntrials
+            entropy += T.log(pklayer.s).sum() / self.ntrials
+
         return entropy
 
     def getDynParams(self):
@@ -215,7 +239,7 @@ class SmoothingPastLDSTimeSeries(SmoothingLDSTimeSeries):
     SmoothingLDSTimeSeries that uses past observations in addition to current
     to evaluate the latent.
     '''
-    def __init__(self, RecognitionParams, Input, xDim, yDim,
+    def __init__(self, RecognitionParams, Input, xDim, yDim, ntrials,
                  srng=None, nrng=None):
         '''
         :parameters:
@@ -229,6 +253,7 @@ class SmoothingPastLDSTimeSeries(SmoothingLDSTimeSeries):
             - xDim, yDim, zDim : (integers) dimension of
                 latent space (x) and observation (y)
         '''
+        self.ntrials = np.cast[theano.config.floatX](ntrials)
         if 'lag' in RecognitionParams:
             self.lag = RecognitionParams['lag']
         else:

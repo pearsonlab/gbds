@@ -1275,12 +1275,14 @@ class NNLDS(GenerativeModel):
     """
     Neural Network, Non-Linear Dynamical System
     """
-    def __init__(self, GenerativeParams, xDim, yDim, yDim_in, srng=None, nrng=None):
+    def __init__(self, GenerativeParams, xDim, yDim, yDim_in, ntrials, srng=None, nrng=None):
         super(NNLDS, self).__init__(GenerativeParams, xDim, yDim, srng, nrng)
 
+        self.ntrials = np.cast[theano.config.floatX](ntrials)
         self.yDim_in = yDim_in  # dimension of observation input
         self.lag = GenerativeParams['lag']
         self.NN = GenerativeParams['NN']
+        self.PKbias_layers = GenerativeParams['PKbias_layers']
         self.yCols = GenerativeParams['yCols']  # which dimensions of Y to predict
         # dynamics matrix
         self.A = theano.shared(value=np.diag(np.ones(xDim).astype(theano.config.floatX)), name='A', borrow=True)
@@ -1297,6 +1299,11 @@ class NNLDS(GenerativeModel):
             self.RChol = theano.shared(value=GenerativeParams['RChol'].astype(theano.config.floatX), name='RChol', borrow=True)
         else:
             self.RChol = theano.shared(value=np.random.randn(yDim).astype(theano.config.floatX) / 10, name='RChol', borrow=True)
+        # scale parameter for Laplacian prior on PK biases
+        if 'k' in GenerativeParams:
+            self.k = theano.shared(value=np.cast[theano.config.floatX](GenerativeParams['k']), name='k', borrow=True)
+        else:
+            self.k = theano.shared(value=np.cast[theano.config.floatX](1), name='k', borrow=True)
 
         # we assume diagonal covariance (RChol is a vector)
         self.Rinv = 1. / (self.RChol**2)  #Tla.matrix_inverse(T.dot(self.RChol ,T.transpose(self.RChol)))
@@ -1322,6 +1329,10 @@ class NNLDS(GenerativeModel):
             self.p_L = theano.shared(value=np.cast[theano.config.floatX](GenerativeParams['p_L']), name='p_L', borrow=True)
         else:
             self.p_L = None
+
+    def set_PKbias_mode(self, mode):
+        for pklayer in self.PKbias_layers:
+            pklayer.set_mode(mode)
 
     def getNextState(self, curr_x, curr_y):
         """
@@ -1393,6 +1404,11 @@ class NNLDS(GenerativeModel):
         if self.p_L is not None:
             LogDensity += self.p_L * T.abs_(self.Lambda).sum()
             LogDensity += self.p_L * T.abs_(self.Lambda0).sum()
+
+        # prior on PK biases
+        for pklayer in self.PKbias_layers:
+            LogDensity += (-T.abs_(pklayer.biases) / self.k - T.log(2 * self.k)).sum() / self.ntrials
+            LogDensity += T.log(pklayer.s).sum() / self.ntrials
 
         return LogDensity
 
