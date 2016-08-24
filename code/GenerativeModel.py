@@ -1416,7 +1416,7 @@ class NNLDS(GenerativeModel):
         '''
         Return parameters of the GenerativeModel.
         '''
-        rets = lasagne.layers.get_all_params(self.NN)
+        rets = lasagne.layers.get_all_params(self.NN, trainable=True)
         # rets += [self.log_vel]
         rets += [self.A]
         rets += [self.QChol_diag] + [self.Q0Chol_diag]

@@ -222,7 +222,7 @@ class SmoothingLDSTimeSeries(RecognitionModel):
         return [self.A]+[self.QinvChol]+[self.Q0invChol]
 
     def getParams(self):
-        return self.getDynParams() + lasagne.layers.get_all_params(self.NN_Mu) + lasagne.layers.get_all_params(self.NN_Lambda)
+        return self.getDynParams() + lasagne.layers.get_all_params(self.NN_Mu, trainable=True) + lasagne.layers.get_all_params(self.NN_Lambda, trainable=True)
 
 
     def get_summary(self, yy):
