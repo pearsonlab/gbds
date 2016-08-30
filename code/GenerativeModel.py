@@ -1338,7 +1338,9 @@ class NNLDS(GenerativeModel):
         """
         Return predicted next data point based on given data
         """
-        Upred, Ypred = self.get_UYpred(curr_x, curr_y, noise=True)
+        Upred, Ypred = self.get_UYpred(curr_x, curr_y, noise=True,
+                                       bn_update_averages=False,
+                                       bn_use_averages=True)
         Ypred = Ypred[-1]
         return Ypred
 
@@ -1353,13 +1355,16 @@ class NNLDS(GenerativeModel):
 
         return Y
 
-    def get_UYpred(self, X, Y, noise=False):
+    def get_UYpred(self, X, Y, noise=False, bn_use_averages=True,
+                   bn_update_averages=False):
         """
         Return the predicted U and Y for each point in Y.
         """
         Y_lag = self.make_lags(Y)
 
-        U = lasagne.layers.get_output(self.NN, inputs=Y_lag)
+        U = lasagne.layers.get_output(self.NN, inputs=Y_lag,
+                                      batch_norm_update_averages=bn_update_averages,
+                                      batch_norm_use_averages=bn_use_averages)
         U += X
 
         if noise:
@@ -1374,7 +1379,8 @@ class NNLDS(GenerativeModel):
         '''
         Return a theano function that calculates a fit for the given data.
         '''
-        Upred, Ypred = self.get_UYpred(X, Y_true)
+        Upred, Ypred = self.get_UYpred(X, Y_true, bn_update_averages=False,
+                                       bn_use_averages=True)
         return Ypred[:-1]
 
     def evaluateLogDensity(self, X, Y_true):
@@ -1382,7 +1388,8 @@ class NNLDS(GenerativeModel):
         Return a theano function that evaluates the log-density of the
         GenerativeModel.
         '''
-        Upred, Ypred = self.get_UYpred(X, Y_true)
+        Upred, Ypred = self.get_UYpred(X, Y_true, bn_update_averages=True,
+                                       bn_use_averages=False)
         Upred = Upred[:-1]
         Ypred = Ypred[:-1]
         U_true = T.arctanh((Y_true[1:, self.yCols] - Y_true[:-1, self.yCols]) / self.vel.reshape((1, self.yDim)))

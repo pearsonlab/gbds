@@ -527,6 +527,15 @@ class SGVB_NN():#(Trainable):
         self.xDim_ball = yDim_ball
         self.yDim = self.yDim_goalie + self.yDim_ball
 
+        self.all_PKbias_layers = (rec_params_ball['NN_Mu']['PKbias_layers'] +
+                                  rec_params_ball['NN_Lambda']['PKbias_layers'] +
+                                  rec_params_goalie['NN_Mu']['PKbias_layers'] +
+                                  rec_params_goalie['NN_Lambda']['PKbias_layers'] +
+                                  gen_params_ball['PKbias_layers'] +
+                                  gen_params_goalie['PKbias_layers'])
+        for pklayer in self.all_PKbias_layers:
+            pklayer.set_mode(self.mode)
+
         # instantiate our prior and recognition models
         self.mrec_goalie = REC_MODEL(rec_params_goalie, self.Y,
                                      self.xDim_goalie, self.yDim, ntrials,
@@ -541,16 +550,8 @@ class SGVB_NN():#(Trainable):
                                      self.yDim_ball, self.yDim, ntrials,
                                      srng=self.srng, nrng=self.nrng)
 
-        self.set_PKbias_mode(self.mode)
-
         self.isTrainingGenerativeModel = True
         self.isTrainingRecognitionModel = True
-
-    def set_PKbias_mode(self, mode):
-        self.mrec_goalie.set_PKbias_mode(mode)
-        self.mrec_ball.set_PKbias_mode(mode)
-        self.mprior_goalie.set_PKbias_mode(mode)
-        self.mprior_ball.set_PKbias_mode(mode)
 
     def getParams(self):
         '''
@@ -583,8 +584,8 @@ class SGVB_NN():#(Trainable):
         '''
         Compute a one-sample approximation the ELBO (lower bound on marginal likelihood), normalized by batch size (length of Y in first dimension).
         '''
-        qg = self.mrec_goalie.getSample()
-        qb = self.mrec_ball.getSample()
+        qg = self.mrec_goalie.getSample(bn_update_averages=True, bn_use_averages=False)
+        qb = self.mrec_ball.getSample(bn_update_averages=True, bn_use_averages=False)
         thelik = self.mprior_goalie.evaluateLogDensity(qg, self.Y)
         thelik += self.mprior_ball.evaluateLogDensity(qb, self.Y)
         theentropy = self.mrec_goalie.evalEntropy() + self.mrec_ball.evalEntropy()

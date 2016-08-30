@@ -120,14 +120,15 @@ class SmoothingLDSTimeSeries(RecognitionModel):
         # This is the neural network that parameterizes the state mean, mu
         self.NN_Mu = RecognitionParams['NN_Mu']['network']
         self.PKbias_layers_mu = RecognitionParams['NN_Mu']['PKbias_layers']
-        # Mu will automatically be of size [T x xDim]
-        self.Mu = lasagne.layers.get_output(self.NN_Mu, inputs = self.Input)
 
         self.NN_Lambda = RecognitionParams['NN_Lambda']['network']
         self.PKbias_layers_lambda = RecognitionParams['NN_Lambda']['PKbias_layers']
-        lambda_net_out = lasagne.layers.get_output(self.NN_Lambda, inputs=self.Input)
+
+        # Mu will automatically be of size [T x xDim]
+        self.Mu = lasagne.layers.get_output(self.NN_Mu, inputs = self.Input)
+        self.lambda_net_out = lasagne.layers.get_output(self.NN_Lambda, inputs=self.Input)
         # Lambda will automatically be of size [T x xDim x xDim]
-        self.LambdaChol = T.reshape(lambda_net_out, [self.Tt, xDim, xDim]) #+ T.eye(self.xDim)
+        self.LambdaChol = T.reshape(self.lambda_net_out, [self.Tt, xDim, xDim]) #+ T.eye(self.xDim)
 
         # scale parameter for Laplacian prior on PK biases
         if 'k' in RecognitionParams:
@@ -136,12 +137,6 @@ class SmoothingLDSTimeSeries(RecognitionModel):
             self.k = theano.shared(value=np.cast[theano.config.floatX](1), name='k', borrow=True)
 
         self._initialize_posterior_distribution(RecognitionParams)
-
-    def set_PKbias_mode(self, mode):
-        for pklayer in self.PKbias_layers_mu:
-            pklayer.set_mode(mode)
-        for pklayer in self.PKbias_layers_lambda:
-            pklayer.set_mode(mode)
 
     def _initialize_posterior_distribution(self, RecognitionParams):
 
@@ -197,9 +192,18 @@ class SmoothingLDSTimeSeries(RecognitionModel):
             return T.log(T.diag(L)).sum()
         self.ln_determinant = -2*theano.scan(fn=comp_log_det, sequences=self.the_chol[0])[0].sum()
 
-    def getSample(self):
+    def getSample(self, bn_update_averages=False, bn_use_averages=True):
         normSamps = self.srng.normal([self.Tt, self.xDim])
-        return self.postX + blk_chol_inv(self.the_chol[0], self.the_chol[1], normSamps, lower=False, transpose=True)
+        # must replace NN outputs with appropriate BN flags activated
+        new_Mu = lasagne.layers.get_output(self.NN_Mu, inputs=self.Input,
+                                           batch_norm_update_averages=bn_update_averages,
+                                           batch_norm_use_averages=bn_use_averages)
+        new_lambda_out = lasagne.layers.get_output(self.NN_Lambda, inputs=self.Input,
+                                                   batch_norm_update_averages=bn_update_averages,
+                                                   batch_norm_use_averages=bn_use_averages)
+        new_postX = theano.clone(self.postX, replace={self.Mu:new_Mu,
+                                                      self.lambda_net_out: new_lambda_out})
+        return new_postX + blk_chol_inv(self.the_chol[0], self.the_chol[1], normSamps, lower=False, transpose=True)
 
     def evalEntropy(self): # we want it to be smooth, this is a prior on being smooth...
         entropy = self.ln_determinant/2 + self.xDim*self.Tt/2.0*(1+np.log(2*np.pi))
