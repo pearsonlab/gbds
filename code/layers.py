@@ -30,6 +30,7 @@ class PKBiasLayer(lasagne.layers.Layer):
         # log_s can be unconstrained
         self.s = T.exp(self.log_s)
         self.draw_biases()
+        self.draw_on_every_output = True
 
     def set_mode(self, mode):
         self.mode = mode
@@ -38,7 +39,8 @@ class PKBiasLayer(lasagne.layers.Layer):
         self.biases = self.m + self.srng.normal(self.s.shape) * self.s
 
     def get_output_for(self, input, **kwargs):
-        self.draw_biases()
+        if self.draw_on_every_output:
+            self.draw_biases()
         act_biases = self.mode.astype(theano.config.floatX).reshape((1, -1)).dot(self.biases)
 
         return input + act_biases
