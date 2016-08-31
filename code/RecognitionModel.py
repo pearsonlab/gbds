@@ -130,12 +130,6 @@ class SmoothingLDSTimeSeries(RecognitionModel):
         # Lambda will automatically be of size [T x xDim x xDim]
         self.LambdaChol = T.reshape(self.lambda_net_out, [self.Tt, xDim, xDim]) #+ T.eye(self.xDim)
 
-        # scale parameter for Laplacian prior on PK biases
-        if 'k' in RecognitionParams:
-            self.k = theano.shared(value=np.cast[theano.config.floatX](RecognitionParams['k']), name='k', borrow=True)
-        else:
-            self.k = theano.shared(value=np.cast[theano.config.floatX](1), name='k', borrow=True)
-
         self._initialize_posterior_distribution(RecognitionParams)
 
     def _initialize_posterior_distribution(self, RecognitionParams):
@@ -213,13 +207,10 @@ class SmoothingLDSTimeSeries(RecognitionModel):
 
         # prior on PK biases
         for pklayer in self.PKbias_layers_mu:
-            entropy += (-T.abs_(pklayer.biases) / self.k - T.log(2 * self.k)).sum() / self.ntrials
-            entropy += T.log(pklayer.s).sum() / self.ntrials
+            entropy += pklayer.get_ELBO(self.ntrials)
 
         for pklayer in self.PKbias_layers_lambda:
-            entropy += (-T.abs_(pklayer.biases) / self.k - T.log(2 * self.k)).sum() / self.ntrials
-            entropy += T.log(pklayer.s).sum() / self.ntrials
-
+            entropy += pklayer.get_ELBO(self.ntrials)
         return entropy
 
     def getDynParams(self):

@@ -1299,11 +1299,6 @@ class NNLDS(GenerativeModel):
             self.RChol = theano.shared(value=GenerativeParams['RChol'].astype(theano.config.floatX), name='RChol', borrow=True)
         else:
             self.RChol = theano.shared(value=np.random.randn(yDim).astype(theano.config.floatX) / 10, name='RChol', borrow=True)
-        # scale parameter for Laplacian prior on PK biases
-        if 'k' in GenerativeParams:
-            self.k = theano.shared(value=np.cast[theano.config.floatX](GenerativeParams['k']), name='k', borrow=True)
-        else:
-            self.k = theano.shared(value=np.cast[theano.config.floatX](1), name='k', borrow=True)
 
         # we assume diagonal covariance (RChol is a vector)
         self.Rinv = 1. / (self.RChol**2)  #Tla.matrix_inverse(T.dot(self.RChol ,T.transpose(self.RChol)))
@@ -1329,10 +1324,6 @@ class NNLDS(GenerativeModel):
             self.p_L = theano.shared(value=np.cast[theano.config.floatX](GenerativeParams['p_L']), name='p_L', borrow=True)
         else:
             self.p_L = None
-
-    def set_PKbias_mode(self, mode):
-        for pklayer in self.PKbias_layers:
-            pklayer.set_mode(mode)
 
     def getNextState(self, curr_x, curr_y):
         """
@@ -1414,8 +1405,7 @@ class NNLDS(GenerativeModel):
 
         # prior on PK biases
         for pklayer in self.PKbias_layers:
-            LogDensity += (-T.abs_(pklayer.biases) / self.k - T.log(2 * self.k)).sum() / self.ntrials
-            LogDensity += T.log(pklayer.s).sum() / self.ntrials
+            LogDensity += pklayer.get_ELBO(self.ntrials)
 
         return LogDensity
 
