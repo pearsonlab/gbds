@@ -1281,11 +1281,17 @@ class NNLDS(GenerativeModel):
         self.ntrials = np.cast[theano.config.floatX](ntrials)
         self.yDim_in = yDim_in  # dimension of observation input
         self.lag = GenerativeParams['lag']
-        self.NN = GenerativeParams['NN']
-        self.PKbias_layers = GenerativeParams['PKbias_layers']
+        self.NN_Gen = GenerativeParams['NN_Gen']['network']
+        self.PKbias_layers_gen = GenerativeParams['NN_Gen']['PKbias_layers']
         self.yCols = GenerativeParams['yCols']  # which dimensions of Y to predict
-        # dynamics matrix
-        self.A = theano.shared(value=np.diag(np.ones(xDim).astype(theano.config.floatX)), name='A', borrow=True)
+        # dynamics matrix (or NN)
+        if 'NN_A' in GenerativeParams:
+            self.NN_A = GenerativeParams['NN_A']['network']
+            self.PKbias_layers_A = GenerativeParams['NN_A']['PKbias_layers']
+            self.dyn_lag = GenerativeParams['dyn_lag']
+            self.A = None
+        else:
+            self.A = theano.shared(value=np.diag(np.ones(xDim).astype(theano.config.floatX)), name='A', borrow=True)
         # cholesky of innovation cov matrix
         self.QChol_diag = theano.shared(value=(np.ones(xDim)).astype(theano.config.floatX), name='QChol_diag', borrow=True)
         self.QChol = T.diag(self.QChol_diag)
@@ -1335,25 +1341,27 @@ class NNLDS(GenerativeModel):
         Ypred = Ypred[-1]
         return Ypred
 
-    def make_lags(self, Y):
+    def make_lags(self, data, lag):
         """
         Take a time series and include previous time-points in each row
         """
-        for i in range(1, self.lag + 1):
-            lagged = T.vertical_stack(Y[0, :self.yDim_in].reshape((1, self.yDim_in)),
-                                      Y[:-1, -self.yDim_in:])
-            Y = T.horizontal_stack(Y, lagged)
+        dims = data.shape[1]
+        lag_data = data.copy()
+        for i in range(1, lag + 1):
+            lag_cols = T.vertical_stack(lag_data[0, :dims].reshape((1, dims)),
+                                        lag_data[:-1, -dims:])
+            lag_data = T.horizontal_stack(lag_data, lag_cols)
 
-        return Y
+        return lag_data
 
     def get_UYpred(self, X, Y, noise=False, bn_use_averages=True,
                    bn_update_averages=False):
         """
         Return the predicted U and Y for each point in Y.
         """
-        Y_lag = self.make_lags(Y)
+        Y_lag = self.make_lags(Y, self.lag)
 
-        U = lasagne.layers.get_output(self.NN, inputs=Y_lag,
+        U = lasagne.layers.get_output(self.NN_Gen, inputs=Y_lag,
                                       batch_norm_update_averages=bn_update_averages,
                                       batch_norm_use_averages=bn_use_averages)
         U += X
@@ -1390,7 +1398,13 @@ class NNLDS(GenerativeModel):
         LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y_true.shape[0] - 0.5*(self.yDim)*np.log(2*np.pi)*Y_true.shape[0]
 
         curr_X = X[1:, :]
-        Xpred = T.dot(X[:-1], self.A)
+        if self.A is not None:
+            Xpred = T.dot(X[:-1], self.A)
+        else:
+            X_lag = self.make_lags(X[:-1], self.dyn_lag)
+            Xpred = lasagne.layers.get_output(self.NN_A, inputs=X_lag,
+                                              batch_norm_update_averages=True,
+                                              batch_norm_use_averages=False)
         resX = curr_X - Xpred
         resX0 = X[0] - self.x0
         LogDensity += (-(0.5 * T.dot(resX.T, resX) * self.Lambda).sum() -
@@ -1404,8 +1418,12 @@ class NNLDS(GenerativeModel):
             LogDensity += self.p_L * T.abs_(self.Lambda0).sum()
 
         # prior on PK biases
-        for pklayer in self.PKbias_layers:
+        for pklayer in self.PKbias_layers_gen:
             LogDensity += pklayer.get_ELBO(self.ntrials)
+
+        if self.A is None:
+            for pklayer in self.PKbias_layers_A:
+                LogDensity += pklayer.get_ELBO(self.ntrials)
 
         return LogDensity
 
@@ -1413,9 +1431,12 @@ class NNLDS(GenerativeModel):
         '''
         Return parameters of the GenerativeModel.
         '''
-        rets = lasagne.layers.get_all_params(self.NN, trainable=True)
+        rets = lasagne.layers.get_all_params(self.NN_Gen, trainable=True)
         # rets += [self.log_vel]
-        rets += [self.A]
+        if self.A is None:
+            rets = lasagne.layers.get_all_params(self.NN_A, trainable=True)
+        else:
+            rets += [self.A]
         rets += [self.QChol_diag] + [self.Q0Chol_diag]
         rets += [self.x0]
         # rets += [self.RChol]
