@@ -1402,9 +1402,10 @@ class NNLDS(GenerativeModel):
             Xpred = T.dot(X[:-1], self.A)
         else:
             X_lag = self.make_lags(X[:-1], self.dyn_lag)
-            Xpred = lasagne.layers.get_output(self.NN_A, inputs=X_lag,
-                                              batch_norm_update_averages=True,
-                                              batch_norm_use_averages=False)
+            Xpred = X[:-1]
+            Xpred += lasagne.layers.get_output(self.NN_A, inputs=X_lag,
+                                               batch_norm_update_averages=True,
+                                               batch_norm_use_averages=False)
         resX = curr_X - Xpred
         resX0 = X[0] - self.x0
         LogDensity += (-(0.5 * T.dot(resX.T, resX) * self.Lambda).sum() -
