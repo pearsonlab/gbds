@@ -16,13 +16,13 @@ class PKBiasLayer(lasagne.layers.Layer):
     3: muscimol and DLPFC, biases 0 and 2 are added
     4: muscimol and DMPFC, biases 1 and 3 are added
     """
-    def __init__(self, incoming, srng, k, param_init=lasagne.init.Normal(0.01),
+    def __init__(self, incoming, srng, params, param_init=lasagne.init.Normal(0.01),
                  num_biases=4, **kwargs):
         super(PKBiasLayer, self).__init__(incoming, **kwargs)
         num_inputs = self.input_shape[1]
         self.mode = T.zeros(num_biases)
         self.srng = srng
-        self.k = np.cast[theano.config.floatX](k)
+        self.k = np.cast[theano.config.floatX](params['k'])
 
         self.m = self.add_param(param_init, (num_biases, num_inputs),
                                 name='m')
@@ -72,16 +72,16 @@ class PKRowBiasLayer(lasagne.layers.Layer):
     3: muscimol and DLPFC, biases 0 and 2 are added
     4: muscimol and DMPFC, biases 1 and 3 are added
     """
-    def __init__(self, incoming, srng, a, b, s, param_init=lasagne.init.Normal(0.01),
+    def __init__(self, incoming, srng, params, param_init=lasagne.init.Normal(0.01),
                  num_biases=4, **kwargs):
         super(PKRowBiasLayer, self).__init__(incoming, **kwargs)
         num_inputs = self.input_shape[1]
         self.mode = T.zeros(num_biases)
         self.srng = srng
         # parameters on prior
-        self.a = np.cast[theano.config.floatX](a)  # shape
-        self.b = np.cast[theano.config.floatX](b)  # rate
-        self.s = s.astype(theano.config.floatX)  # standard deviation
+        self.a = np.cast[theano.config.floatX](params['a'])  # shape
+        self.b = np.cast[theano.config.floatX](params['b'])  # rate
+        self.s = params['s'].astype(theano.config.floatX)  # standard deviation
 
         # learnable posterior parameters
         # normal dist over biases
@@ -118,10 +118,10 @@ class PKRowBiasLayer(lasagne.layers.Layer):
         Normalized by nbatches (number of batches in dataset)
         """
         # Log Density
-        ELBO = ((self.gamma**2) / (2 * self.tau * self.s**2) -
+        ELBO = (-(self.gamma**2) / (2 * self.tau * self.s**2) -
                 0.5 * T.log(2 * np.pi * self.tau * self.s**2)).sum()
         ELBO += ((self.alpha - 1) * T.log(self.tau) + self.a * T.log(self.b) -
-                 self.b * self.tau - T.log(T.gamma(self.a))).sum()
+                 self.b * self.tau - T.gammaln(self.a)).sum()
         # entropy
         ELBO += (0.5 * T.log(2 * np.pi) + 0.5 + T.log(self.sigma)).sum()
         ELBO += (T.log(self.beta) + self.alpha + 0.5 + 0.5 * T.log(2 * np.pi)).sum()
