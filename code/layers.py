@@ -107,9 +107,9 @@ class PKRowBiasLayer(lasagne.layers.Layer):
         self.mode = mode
 
     def draw_biases(self):
-        self.gamma = self.mu + self.srng.normal(self.sigma.shape) * self.sigma
         self.tau = T.exp(self.alpha + self.srng.normal(self.beta.shape) * self.beta)
         self.tau = T.addbroadcast(self.tau, 1)  # allow broadcasting across columns
+        self.gamma = self.mu + self.srng.normal(self.sigma.shape) * (T.sqrt(self.tau) * self.sigma)
 
     def get_ELBO(self, nbatches):
         """
@@ -123,7 +123,7 @@ class PKRowBiasLayer(lasagne.layers.Layer):
         ELBO += ((self.alpha - 1) * T.log(self.tau) + self.a * T.log(self.b) -
                  self.b * self.tau - T.gammaln(self.a)).sum()
         # entropy
-        ELBO += (0.5 * T.log(2 * np.pi) + 0.5 + T.log(self.sigma)).sum()
+        ELBO += (0.5 * T.log(2 * np.pi * self.tau) + 0.5 + T.log(self.sigma)).sum()
         ELBO += (T.log(self.beta) + self.alpha + 0.5 + 0.5 * T.log(2 * np.pi)).sum()
         return ELBO / nbatches
 
