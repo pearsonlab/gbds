@@ -81,25 +81,27 @@ class PKRowBiasLayer(lasagne.layers.Layer):
         # parameters on prior
         self.a = np.cast[theano.config.floatX](params['a'])  # shape
         self.b = np.cast[theano.config.floatX](params['b'])  # rate
-        self.s = params['s'].astype(theano.config.floatX)  # standard deviation
 
         # learnable posterior parameters
         # normal dist over biases
         self.mu = self.add_param(param_init, (num_biases, num_inputs),
                                  name='mu')
 
-        self.log_sig = self.add_param(param_init, (num_biases, num_inputs),
-                                      name='log_sig')
+        self.unc_sig = self.add_param(param_init, (num_biases, num_inputs),
+                                      name='unc_sig')
 
-        # log normal over rows
-        self.alpha = self.add_param(param_init, (num_biases, 1),
-                                    name='alpha')
-        self.log_beta = self.add_param(param_init, (num_biases, 1),
-                                       name='log_beta')
+        # gamma over rows
+        self.alpha = theano.shared(value=self.a * np.ones((num_biases, 1)),
+                                   name='alpha', broadcastable=[False, True])
+        self.beta = theano.shared(value=self.b * np.ones((num_biases, 1)),
+                                  name='beta', broadcastable=[False, True])
+
+        # update for alpha
+        self.alpha += (num_inputs / 2.0)
+
         # standard deviation will always be positive but optimization over
-        # log_sig and log_beta can be unconstrained
-        self.sigma = T.exp(self.log_sig)
-        self.beta = T.exp(self.log_beta)
+        # unc_sig can be unconstrained
+        self.sigma = T.nnet.softplus(self.unc_sig)
         self.draw_biases()
         self.draw_on_every_output = True
 
@@ -107,9 +109,12 @@ class PKRowBiasLayer(lasagne.layers.Layer):
         self.mode = mode
 
     def draw_biases(self):
-        self.tau = T.exp(self.alpha + self.srng.normal(self.beta.shape) * self.beta)
-        self.tau = T.addbroadcast(self.tau, 1)  # allow broadcasting across columns
-        self.gamma = self.mu + self.srng.normal(self.sigma.shape) * (T.sqrt(self.tau) * self.sigma)
+        self.gamma = self.mu + self.srng.normal(self.sigma.shape) * self.sigma
+
+    def coord_update(self):
+        self.beta = self.b + 0.5 * (self.mu**2 + self.sigma**2).sum(axis=1,
+                                                                    keepdims=True)
+        self.beta = T.addbroadcast(self.beta, 1)
 
     def get_ELBO(self, nbatches):
         """
@@ -117,14 +122,18 @@ class PKRowBiasLayer(lasagne.layers.Layer):
 
         Normalized by nbatches (number of batches in dataset)
         """
+        self.coord_update()
         # Log Density
-        ELBO = (-(self.gamma**2) / (2 * self.tau * self.s**2) -
-                0.5 * T.log(2 * np.pi * self.tau * self.s**2)).sum()
-        ELBO += ((self.alpha - 1) * T.log(self.tau) + self.a * T.log(self.b) -
-                 self.b * self.tau - T.gammaln(self.a)).sum()
+        ELBO = (-0.5 * (self.mu**2 + self.sigma**2) * (self.alpha / self.beta) +
+                0.5 * (T.psi(self.alpha) - T.log(self.beta)) -
+                0.5 * T.log(2 * np.pi)).sum()
+        ELBO += ((self.a - 1) * (T.psi(self.alpha) - T.log(self.beta)) -
+                 self.b * (self.alpha / self.beta) + self.a * T.log(self.b) -
+                 T.gammaln(self.a)).sum()
         # entropy
-        ELBO += (0.5 * T.log(2 * np.pi * self.tau) + 0.5 + T.log(self.sigma)).sum()
-        ELBO += (T.log(self.beta) + self.alpha + 0.5 + 0.5 * T.log(2 * np.pi)).sum()
+        ELBO += (0.5 * T.log(2 * np.pi) + 0.5 + T.log(self.sigma)).sum()
+        ELBO += (self.alpha - T.log(self.beta) + T.gammaln(self.alpha) +
+                 (1 - self.alpha) * T.psi(self.alpha)).sum()
         return ELBO / nbatches
 
     def get_output_for(self, input, **kwargs):
