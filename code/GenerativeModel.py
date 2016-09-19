@@ -1291,7 +1291,13 @@ class NNLDS(GenerativeModel):
             self.dyn_lag = GenerativeParams['dyn_lag']
             self.A = None
         else:
-            self.A = theano.shared(value=np.diag(np.ones(xDim).astype(theano.config.floatX)), name='A', borrow=True)
+            if 'AR_P' in GenerativeParams:
+                self.A = []
+                for i in range(GenerativeParams['AR_P']):
+                    self.A.append(theano.shared(value=np.diag(np.ones(xDim).astype(theano.config.floatX)), name='A_%i' % i, borrow=True))
+            else:  # AR1
+                self.A = [theano.shared(value=np.diag(np.ones(xDim).astype(theano.config.floatX)), name='A', borrow=True)]
+            self.AR_P = len(self.A)  # order of AR process
         # cholesky of innovation cov matrix
         self.QChol_diag = theano.shared(value=(np.ones(xDim)).astype(theano.config.floatX), name='QChol_diag', borrow=True)
         self.QChol = T.diag(self.QChol_diag)
@@ -1397,10 +1403,13 @@ class NNLDS(GenerativeModel):
         LogDensity = -(0.5*T.dot(resU.T,resU)*T.diag(self.Rinv)).sum()
         LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y_true.shape[0] - 0.5*(self.yDim)*np.log(2*np.pi)*Y_true.shape[0]
 
-        curr_X = X[1:, :]
         if self.A is not None:
-            Xpred = T.dot(X[:-1], self.A)
+            curr_X = X[self.AR_P:, :]
+            Xpred = T.zeros_like(curr_X)
+            for i in range(self.AR_P - 1, -1, -1):
+                Xpred += T.dot(X[i:(-self.AR_P + i)], self.A[i])
         else:
+            curr_X = X[1:, :]
             X_lag = self.make_lags(X[:-1], self.dyn_lag)
             Xpred = X[:-1]
             Xpred += lasagne.layers.get_output(self.NN_A, inputs=X_lag,
@@ -1437,7 +1446,7 @@ class NNLDS(GenerativeModel):
         if self.A is None:
             rets = lasagne.layers.get_all_params(self.NN_A, trainable=True)
         else:
-            rets += [self.A]
+            rets += self.A
         rets += [self.QChol_diag] + [self.Q0Chol_diag]
         rets += [self.x0]
         # rets += [self.RChol]
