@@ -1306,6 +1306,8 @@ class NNLDS(GenerativeModel):
         self.Q0Chol = T.diag(self.Q0Chol_diag)
         # set to zero for stationary distribution
         self.x0 = theano.shared(value=np.zeros((xDim,)).astype(theano.config.floatX), name='x0', borrow=True)
+        self.trend = theano.shared(value=np.zeros((1, xDim)).astype(theano.config.floatX), name='trend',
+                                   borrow=True, broadcastable=[True, False])
         # cholesky of observation noise cov matrix
         if 'RChol' in GenerativeParams:
             self.RChol = theano.shared(value=GenerativeParams['RChol'].astype(theano.config.floatX), name='RChol', borrow=True)
@@ -1408,6 +1410,7 @@ class NNLDS(GenerativeModel):
             Xpred = T.zeros_like(curr_X)
             for i in range(self.AR_P - 1, -1, -1):
                 Xpred += T.dot(X[i:(-self.AR_P + i)], self.A[i])
+            Xpred += self.trend
         else:
             curr_X = X[1:, :]
             X_lag = self.make_lags(X[:-1], self.dyn_lag)
@@ -1450,6 +1453,7 @@ class NNLDS(GenerativeModel):
         rets += [self.QChol_diag] + [self.Q0Chol_diag]
         rets += [self.x0]
         # rets += [self.RChol]
+        rets += [self.trend]
         return rets
 
 
