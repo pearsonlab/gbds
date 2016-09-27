@@ -124,11 +124,16 @@ class SmoothingLDSTimeSeries(RecognitionModel):
         self.NN_Lambda = RecognitionParams['NN_Lambda']['network']
         self.PKbias_layers_lambda = RecognitionParams['NN_Lambda']['PKbias_layers']
 
+        self.NN_LambdaX = RecognitionParams['NN_LambdaX']['network']
+        self.PKbias_layers_lambdaX = RecognitionParams['NN_LambdaX']['PKbias_layers']
+
         # Mu will automatically be of size [T x xDim]
         self.Mu = lasagne.layers.get_output(self.NN_Mu, inputs = self.Input)
         self.lambda_net_out = lasagne.layers.get_output(self.NN_Lambda, inputs=self.Input)
+        self.lambdaX_net_out = lasagne.layers.get_output(self.NN_LambdaX, inputs=self.Input[1:])
         # Lambda will automatically be of size [T x xDim x xDim]
         self.LambdaChol = T.reshape(self.lambda_net_out, [self.Tt, xDim, xDim]) #+ T.eye(self.xDim)
+        self.LambdaXChol = T.reshape(self.lambdaX_net_out, [self.Tt-1, xDim, xDim])
 
         self._initialize_posterior_distribution(RecognitionParams)
 
@@ -136,6 +141,7 @@ class SmoothingLDSTimeSeries(RecognitionModel):
 
         # Now actually compute the precisions (from their square roots)
         self.Lambda = T.batched_dot(self.LambdaChol, self.LambdaChol.dimshuffle(0,2,1))
+        self.LambdaX = T.batched_dot(self.LambdaXChol, self.LambdaXChol.dimshuffle(0,2,1))
 
         # dynamics matrix & initialize the innovations precision, xDim x xDim
         self.A         = theano.shared(value=RecognitionParams['A'].astype(theano.config.floatX)        ,name='A'        )
@@ -161,8 +167,8 @@ class SmoothingLDSTimeSeries(RecognitionModel):
         AQinvArepPlusQ = T.concatenate([T.shape_padleft(self.Q0inv + AQinvA), AQinvArep, T.shape_padleft(self.Qinv)])
 
         # This is our inverse covariance matrix: diagonal (AA) and off-diagonal (BB) blocks.
-        self.AA = self.Lambda + AQinvArepPlusQ
-        self.BB = AQinvrep
+        self.AA = self.Lambda + T.concatenate([T.shape_padleft(T.zeros([self.xDim, self.xDim])), self.LambdaX]) + AQinvArepPlusQ
+        self.BB = T.batched_dot(self.LambdaChol[:-1], self.LambdaXChol.dimshuffle(0,2,1)) + AQinvrep
 
         # symbolic recipe for computing the the diagonal (V) and
         # off-diagonal (VV) blocks of the posterior covariance
@@ -195,8 +201,12 @@ class SmoothingLDSTimeSeries(RecognitionModel):
         new_lambda_out = lasagne.layers.get_output(self.NN_Lambda, inputs=self.Input,
                                                    batch_norm_update_averages=bn_update_averages,
                                                    batch_norm_use_averages=bn_use_averages)
+        new_lambdaX_out = lasagne.layers.get_output(self.NN_LambdaX, inputs=self.Input[1:],
+                                                    batch_norm_update_averages=bn_update_averages,
+                                                    batch_norm_use_averages=bn_use_averages)
         new_postX = theano.clone(self.postX, replace={self.Mu:new_Mu,
-                                                      self.lambda_net_out: new_lambda_out})
+                                                      self.lambda_net_out: new_lambda_out,
+                                                      self.lambdaX_net_out: new_lambdaX_out})
         return new_postX + blk_chol_inv(self.the_chol[0], self.the_chol[1], normSamps, lower=False, transpose=True)
 
     def evalEntropy(self): # we want it to be smooth, this is a prior on being smooth...
@@ -211,13 +221,19 @@ class SmoothingLDSTimeSeries(RecognitionModel):
 
         for pklayer in self.PKbias_layers_lambda:
             entropy += pklayer.get_ELBO(self.ntrials)
+
+        for pklayer in self.PKbias_layers_lambdaX:
+            entropy += pklayer.get_ELBO(self.ntrials)
         return entropy
 
     def getDynParams(self):
         return [self.A]+[self.QinvChol]+[self.Q0invChol]
 
     def getParams(self):
-        return self.getDynParams() + lasagne.layers.get_all_params(self.NN_Mu, trainable=True) + lasagne.layers.get_all_params(self.NN_Lambda, trainable=True)
+        return (self.getDynParams() +
+                lasagne.layers.get_all_params(self.NN_Mu, trainable=True) +
+                lasagne.layers.get_all_params(self.NN_Lambda, trainable=True) +
+                lasagne.layers.get_all_params(self.NN_LambdaX, trainable=True))
 
 
     def get_summary(self, yy):

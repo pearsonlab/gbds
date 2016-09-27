@@ -529,8 +529,10 @@ class SGVB_NN():#(Trainable):
 
         self.all_PKbias_layers = (rec_params_ball['NN_Mu']['PKbias_layers'] +
                                   rec_params_ball['NN_Lambda']['PKbias_layers'] +
+                                  rec_params_ball['NN_LambdaX']['PKbias_layers'] +
                                   rec_params_goalie['NN_Mu']['PKbias_layers'] +
                                   rec_params_goalie['NN_Lambda']['PKbias_layers'] +
+                                  rec_params_goalie['NN_LambdaX']['PKbias_layers'] +
                                   gen_params_ball['NN_Gen']['PKbias_layers'] +
                                   gen_params_goalie['NN_Gen']['PKbias_layers'])
         if 'NN_A' in gen_params_ball:
