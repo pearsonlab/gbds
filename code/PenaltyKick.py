@@ -518,8 +518,16 @@ class SGVB_NN():#(Trainable):
 
         #---------------------------------------------------------
         ## actual model parameters
-        self.X, self.Y = T.matrices('X', 'Y')   # symbolic variables for the data
+        # symbolic variables for the data
+        self.X, self.Y = T.matrices('X', 'Y')
         self.mode = T.ivector('mode')
+        # spikes only recorded in shooter
+        if 'NN_Spikes' in gen_params_ball:
+            self.spikes = T.imatrix('spikes')
+            self.signals = T.ivector('signals')
+            self.joint_spikes = True
+        else:
+            self.joint_spikes = False
 
         self.yDim_goalie = yDim_goalie
         self.yDim_ball = yDim_ball
@@ -558,6 +566,7 @@ class SGVB_NN():#(Trainable):
                                      srng=self.srng, nrng=self.nrng)
 
         self.isTrainingGenerativeModel = True
+        self.isTrainingSpikeModel = False
         self.isTrainingRecognitionModel = True
 
     def getParams(self):
@@ -565,12 +574,15 @@ class SGVB_NN():#(Trainable):
         Return Generative and Recognition Model parameters that are currently being trained.
         '''
         params = []
-        if self.isTrainingRecognitionModel:
-            params += self.mrec_goalie.getParams()
-            params += self.mrec_ball.getParams()
-        if self.isTrainingGenerativeModel:
-            params += self.mprior_goalie.getParams()
-            params += self.mprior_ball.getParams()
+        if self.isTrainingSpikeModel and self.joint_spikes:
+            params += self.mprior_ball.getParams(spike_model=True)
+        else:
+            if self.isTrainingRecognitionModel:
+                params += self.mrec_goalie.getParams()
+                params += self.mrec_ball.getParams()
+            if self.isTrainingGenerativeModel:
+                params += self.mprior_goalie.getParams()
+                params += self.mprior_ball.getParams()
         return params
 
     def EnableGenerativeModelTraining(self):
@@ -591,12 +603,17 @@ class SGVB_NN():#(Trainable):
         '''
         Compute a one-sample approximation the ELBO (lower bound on marginal likelihood), normalized by batch size (length of Y in first dimension).
         '''
-        qg = self.mrec_goalie.getSample(bn_update_averages=True, bn_use_averages=False)
-        qb = self.mrec_ball.getSample(bn_update_averages=True, bn_use_averages=False)
-        thelik = self.mprior_goalie.evaluateLogDensity(qg, self.Y)
-        thelik += self.mprior_ball.evaluateLogDensity(qb, self.Y)
-        theentropy = self.mrec_goalie.evalEntropy() + self.mrec_ball.evalEntropy()
+        if self.isTrainingSpikeModel and self.joint_spikes:
+            qb = self.mrec_ball.getSample()
+            thecost = self.mprior_ball.evaluateLogDensity(
+                qb, self.Y, spikes_and_signals=(self.spikes, self.signals))
+        else:
+            qg = self.mrec_goalie.getSample()
+            qb = self.mrec_ball.getSample()
+            thelik = self.mprior_goalie.evaluateLogDensity(qg, self.Y)
+            thelik += self.mprior_ball.evaluateLogDensity(qb, self.Y)
+            theentropy = self.mrec_goalie.evalEntropy() + self.mrec_ball.evalEntropy()
 
-        thecost = thelik + theentropy
+            thecost = thelik + theentropy
 
         return thecost / self.Y.shape[0]

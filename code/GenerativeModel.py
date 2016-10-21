@@ -1298,6 +1298,12 @@ class NNLDS(GenerativeModel):
             else:  # AR1
                 self.A = [theano.shared(value=np.diag(np.ones(xDim).astype(theano.config.floatX)), name='A', borrow=True)]
             self.AR_P = len(self.A)  # order of AR process
+
+        if 'NN_Spikes' in GenerativeParams:
+            self.NN_Spikes = GenerativeParams['NN_Spikes']
+        else:
+            self.NN_Spikes = None
+
         # cholesky of innovation cov matrix
         self.QChol_diag = theano.shared(value=(np.ones(xDim)).astype(theano.config.floatX), name='QChol_diag', borrow=True)
         self.QChol = T.diag(self.QChol_diag)
@@ -1339,16 +1345,6 @@ class NNLDS(GenerativeModel):
         else:
             self.p_L = None
 
-    def getNextState(self, curr_x, curr_y):
-        """
-        Return predicted next data point based on given data
-        """
-        Upred, Ypred = self.get_UYpred(curr_x, curr_y, noise=True,
-                                       bn_update_averages=False,
-                                       bn_use_averages=True)
-        Ypred = Ypred[-1]
-        return Ypred
-
     def make_lags(self, data, lag):
         """
         Take a time series and include previous time-points in each row
@@ -1362,17 +1358,23 @@ class NNLDS(GenerativeModel):
 
         return lag_data
 
-    def get_UYpred(self, X, Y, noise=False, bn_use_averages=True,
-                   bn_update_averages=False):
+    def get_UYrate_pred(self, X, Y, noise=False):
         """
         Return the predicted U and Y for each point in Y.
         """
         Y_lag = self.make_lags(Y, self.lag)
 
-        U = lasagne.layers.get_output(self.NN_Gen, inputs=Y_lag,
-                                      batch_norm_update_averages=bn_update_averages,
-                                      batch_norm_use_averages=bn_use_averages)
-        U += X
+        NN_out = lasagne.layers.get_output(self.NN_Gen, inputs=Y_lag)
+        U = NN_out + X
+
+        if self.NN_Spikes is not None:
+            vel = T.vertical_stack(T.zeros((1, Y.shape[1])), T.extra_ops.diff(Y, axis=0))
+            acc = T.vertical_stack(T.zeros((2, Y.shape[1])), Y[2:] - 2 * Y[1:-1] + Y[:-2])
+            spike_in = T.horizontal_stack(NN_out, X, Y, vel, acc)  # inputs to firing rate model
+            rate = lasagne.layers.get_output(self.NN_Spikes, inputs=spike_in)
+            rate = T.exp(rate)
+        else:
+            rate = None
 
         if noise:
             U += T.dot(self.srng.normal((self.yDim,)),
@@ -1380,31 +1382,61 @@ class NNLDS(GenerativeModel):
 
         Y_pred = Y[:, self.yCols] + self.vel.reshape((1, self.yDim)) * T.tanh(U)
 
-        return U, Y_pred
+        return U, Y_pred, rate
+
+    def getNextState(self, curr_x, curr_y):
+        """
+        Return predicted next data point based on given data
+        """
+        Upred, Ypred, rate = self.get_UYrate_pred(curr_x, curr_y, noise=True)
+        if rate is not None:
+            return Ypred[-1], rate[-1]
+        else:
+            return Ypred[-1]
 
     def fit_trial(self, X, Y_true):
         '''
         Return a theano function that calculates a fit for the given data.
         '''
-        Upred, Ypred = self.get_UYpred(X, Y_true, bn_update_averages=False,
-                                       bn_use_averages=True)
-        return Ypred[:-1]
+        Upred, Ypred, rate = self.get_UYrate_pred(X, Y_true)
+        if rate is not None:
+            return Ypred[:-1], rate
+        else:
+            return Ypred[:-1]
 
-    def evaluateLogDensity(self, X, Y_true):
+    def evaluateLogDensity(self, X, Y_true, spikes_and_signals=None):
         '''
         Return a theano function that evaluates the log-density of the
         GenerativeModel.
+
+        If spikes and signals not provided, returns LogDensity for behavioral model
+        If provided, returns LogDensity for spike model
         '''
-        Upred, Ypred = self.get_UYpred(X, Y_true, bn_update_averages=True,
-                                       bn_use_averages=False)
+        # get predictions for control, next position (based on control),
+        # and spike rate at every position provided
+        Upred, Ypred, rate = self.get_UYrate_pred(X, Y_true)
+
+        # Poisson density (from PLDS model)
+        # if spikes provided, then assume only training spike model
+        if spikes_and_signals is not None and rate is not None:
+            # unpack ground truth spikes and corresponding signals
+            spikes, signals = spikes_and_signals
+            # select relevant signals from predicted spike rate
+            # since not all signals are present in any given trial
+            rate = rate[:, signals]
+            return T.sum(spikes * T.log(rate) - rate -
+                         T.gammaln(spikes + 1))
+
+        # ignore last predicted control bc we don't have ground truth
         Upred = Upred[:-1]
-        Ypred = Ypred[:-1]
+        # find ground truth control signal
         U_true = T.arctanh((Y_true[1:, self.yCols] - Y_true[:-1, self.yCols]) / self.vel.reshape((1, self.yDim)))
-        resU = U_true - Upred
+        resU = U_true - Upred  # calculate residuals
 
         LogDensity = -(0.5*T.dot(resU.T,resU)*T.diag(self.Rinv)).sum()
         LogDensity += 0.5*(T.log(self.Rinv)).sum()*Y_true.shape[0] - 0.5*(self.yDim)*np.log(2*np.pi)*Y_true.shape[0]
 
+        # calculate prior on latent
         if self.A is not None:
             curr_X = X[self.AR_P:, :]
             Xpred = T.zeros_like(curr_X)
@@ -1415,9 +1447,7 @@ class NNLDS(GenerativeModel):
             curr_X = X[1:, :]
             X_lag = self.make_lags(X[:-1], self.dyn_lag)
             Xpred = X[:-1]
-            Xpred += lasagne.layers.get_output(self.NN_A, inputs=X_lag,
-                                               batch_norm_update_averages=True,
-                                               batch_norm_use_averages=False)
+            Xpred += lasagne.layers.get_output(self.NN_A, inputs=X_lag)
         resX = curr_X - Xpred
         resX0 = X[0] - self.x0
         LogDensity += (-(0.5 * T.dot(resX.T, resX) * self.Lambda).sum() -
@@ -1439,6 +1469,28 @@ class NNLDS(GenerativeModel):
                 LogDensity += pklayer.get_ELBO(self.ntrials)
 
         return LogDensity
+
+    def getParams(self, spike_model=False):
+        '''
+        Return parameters of the GenerativeModel.
+
+        Can only train either behavioral or spiking model at any given time
+        '''
+        if spike_model and self.NN_Spikes is not None:
+            return lasagne.layers.get_all_params(self.NN_Spikes, trainable=True)
+        else:
+            rets = lasagne.layers.get_all_params(self.NN_Gen, trainable=True)
+            # rets += [self.log_vel]
+            if self.A is None:
+                rets += lasagne.layers.get_all_params(self.NN_A, trainable=True)
+            else:
+                rets += self.A
+            rets += [self.QChol_diag] + [self.Q0Chol_diag]
+            rets += [self.x0]
+            # rets += [self.RChol]
+            rets += [self.trend]
+        return rets
+
 
     def getParams(self):
         '''

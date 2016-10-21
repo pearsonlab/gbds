@@ -192,22 +192,9 @@ class SmoothingLDSTimeSeries(RecognitionModel):
             return T.log(T.diag(L)).sum()
         self.ln_determinant = -2*theano.scan(fn=comp_log_det, sequences=self.the_chol[0])[0].sum()
 
-    def getSample(self, bn_update_averages=False, bn_use_averages=True):
+    def getSample(self):
         normSamps = self.srng.normal([self.Tt, self.xDim])
-        # must replace NN outputs with appropriate BN flags activated
-        new_Mu = lasagne.layers.get_output(self.NN_Mu, inputs=self.Input,
-                                           batch_norm_update_averages=bn_update_averages,
-                                           batch_norm_use_averages=bn_use_averages)
-        new_lambda_out = lasagne.layers.get_output(self.NN_Lambda, inputs=self.Input,
-                                                   batch_norm_update_averages=bn_update_averages,
-                                                   batch_norm_use_averages=bn_use_averages)
-        new_lambdaX_out = lasagne.layers.get_output(self.NN_LambdaX, inputs=self.Input[1:],
-                                                    batch_norm_update_averages=bn_update_averages,
-                                                    batch_norm_use_averages=bn_use_averages)
-        new_postX = theano.clone(self.postX, replace={self.Mu:new_Mu,
-                                                      self.lambda_net_out: new_lambda_out,
-                                                      self.lambdaX_net_out: new_lambdaX_out})
-        return new_postX + blk_chol_inv(self.the_chol[0], self.the_chol[1], normSamps, lower=False, transpose=True)
+        return self.postX + blk_chol_inv(self.the_chol[0], self.the_chol[1], normSamps, lower=False, transpose=True)
 
     def evalEntropy(self): # we want it to be smooth, this is a prior on being smooth...
         entropy = self.ln_determinant/2 + self.xDim*self.Tt/2.0*(1+np.log(2*np.pi))
