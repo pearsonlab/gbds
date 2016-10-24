@@ -1370,7 +1370,12 @@ class NNLDS(GenerativeModel):
         if self.NN_Spikes is not None:
             vel = T.vertical_stack(T.zeros((1, Y.shape[1])), T.extra_ops.diff(Y, axis=0))
             acc = T.vertical_stack(T.zeros((2, Y.shape[1])), Y[2:] - 2 * Y[1:-1] + Y[:-2])
-            spike_in = T.horizontal_stack(NN_out, X, Y, vel, acc)  # inputs to firing rate model
+            Y_diff = T.abs_(Y[:, (0,)] - Y[:, (2,)])
+            Y_diff_rate = T.vertical_stack(T.zeros((1, 1)),
+                                           T.extra_ops.diff(Y_diff, axis=0))
+            Y_diff_rate = 20 * T.abs_(Y_diff_rate)
+            spike_in = T.horizontal_stack(NN_out, X, Y, vel, acc, Y_diff,
+                                          Y_diff_rate)  # inputs to firing rate model
             rate = lasagne.layers.get_output(self.NN_Spikes, inputs=spike_in)
             rate = T.exp(rate)
         else:
