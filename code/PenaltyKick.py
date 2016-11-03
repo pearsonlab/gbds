@@ -617,3 +617,123 @@ class SGVB_NN():#(Trainable):
             thecost = thelik + theentropy
 
         return thecost / self.Y.shape[0]
+
+
+class SGVB_GBDS():#(Trainable):
+    '''
+    This class fits a model to PenaltyKick data.
+
+    Inputs:
+    gen_params       - Dictionary of parameters that define the chosen GenerativeModel
+    GEN_MODEL        - A class that inhereits from the GenerativeModel abstract class
+    yDim             - Integer that specifies the dimensionality of the observations
+
+    --------------------------------------------------------------------------
+
+    The SGVB ("Stochastic Gradient Variational Bayes") inference technique is described
+    in the following publications:
+    * Auto-Encoding Variational Bayes
+           - Kingma, Welling (ICLR, 2014)
+    * Stochastic backpropagation and approximate inference in deep generative models.
+           - Rezende et al (ICML, 2014)
+    * Doubly stochastic variational bayes for non-conjugate inference.
+           - Titsias and Lazaro-Gredilla (ICML, 2014)
+    '''
+    def __init__(self,
+                 gen_params_ball,  # dictionary of generative model parameters
+                 gen_params_goalie,  # dictionary of generative model parameters
+                 GEN_MODEL,  # class that inherits from GenerativeModel
+                 yCols_ball,  # number of observation dimensions
+                 yCols_goalie,  # number of observation dimensions
+                 rec_params,  # dictionary of approximate posterior ("recognition model") parameters
+                 REC_MODEL,
+                 ntrials):
+
+        # instantiate rng's
+        self.srng = RandomStreams(seed=234)
+        self.nrng = np.random.RandomState(124)
+
+        #---------------------------------------------------------
+        ## actual model parameters
+        # symbolic variables for the data
+        self.X, self.Y = T.matrices('X', 'Y')
+        # spikes only recorded in shooter
+        if 'NN_Spikes' in gen_params_ball:
+            self.spikes = T.imatrix('spikes')
+            self.signals = T.ivector('signals')
+            self.joint_spikes = True
+        else:
+            self.joint_spikes = False
+
+        self.yCols_goalie = yCols_goalie
+        self.yCols_ball = yCols_ball
+        self.yDim_goalie = len(self.yCols_goalie)
+        self.yDim_ball = len(self.yCols_ball)
+        self.yDim = self.yDim_goalie + self.yDim_ball
+        self.xDim = self.yDim
+
+
+        # instantiate our prior and recognition models
+        self.mrec = REC_MODEL(rec_params, self.Y,
+                              self.xDim, self.yDim, ntrials,
+                              self.srng, self.nrng)
+        self.mprior_goalie = GEN_MODEL(gen_params_goalie, self.yDim_goalie,
+                                       self.yDim_goalie, self.yDim, ntrials,
+                                       srng=self.srng, nrng=self.nrng)
+        self.mprior_ball = GEN_MODEL(gen_params_ball, self.yDim_ball,
+                                     self.yDim_ball, self.yDim, ntrials,
+                                     srng=self.srng, nrng=self.nrng)
+
+        self.isTrainingGenerativeModel = True
+        self.isTrainingSpikeModel = False
+        self.isTrainingRecognitionModel = True
+
+    def getParams(self):
+        '''
+        Return Generative and Recognition Model parameters that are currently being trained.
+        '''
+        params = []
+        if self.isTrainingSpikeModel and self.joint_spikes:
+            params += self.mprior_ball.getParams(spike_model=True)
+        else:
+            if self.isTrainingRecognitionModel:
+                params += self.mrec.getParams()
+            if self.isTrainingGenerativeModel:
+                params += self.mprior_goalie.getParams()
+                params += self.mprior_ball.getParams()
+        return params
+
+    def EnableGenerativeModelTraining(self):
+        '''
+        Enable training of GenerativeModel parameters.
+        '''
+        self.isTrainingGenerativeModel = True
+        print('Enable switching training/test mode in generative model class!\n')
+
+    def DisableGenerativeModelTraining(self):
+        '''
+        Disable training of GenerativeModel parameters.
+        '''
+        self.isTrainingGenerativeModel = False
+        print('Enable switching training/test mode in generative model class!\n')
+
+    def cost(self):
+        '''
+        Compute a one-sample approximation the ELBO (lower bound on marginal likelihood), normalized by batch size (length of Y in first dimension).
+        '''
+        if self.isTrainingSpikeModel and self.joint_spikes:
+            q = self.mrec.getSample()
+            thecost = self.mprior_ball.evaluateLogDensity(
+                q[: self.yCols_ball], self.Y, spikes_and_signals=(self.spikes,
+                                                                  self.signals))
+        else:
+            q = self.mrec.getSample()
+            thelik = self.mprior_goalie.evaluateLogDensity(
+                q[:, self.yCols_goalie], self.Y)
+            thelik += self.mprior_ball.evaluateLogDensity(
+                q[:, self.yCols_ball], self.Y)
+            theentropy = self.mrec.evalEntropy()
+
+            thecost = thelik + theentropy
+
+        return thecost / self.Y.shape[0]

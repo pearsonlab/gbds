@@ -26,6 +26,7 @@ import lasagne
 import theano.tensor as T
 import theano.tensor.nlinalg as Tla
 import theano.tensor.slinalg as Tsla
+from theano.tensor.signal import conv
 import numpy as np
 from theano.tensor.shared_randomstreams import RandomStreams
 
@@ -1497,20 +1498,163 @@ class NNLDS(GenerativeModel):
         return rets
 
 
+class GBDS(GenerativeModel):
+    """
+    Goal-Based Dynamical System
+    """
+    def __init__(self, GenerativeParams, xDim, yDim, yDim_in, ntrials,
+                 srng=None, nrng=None):
+        super(GBDS, self).__init__(GenerativeParams, xDim, yDim, srng, nrng)
+
+        self.ntrials = np.cast[theano.config.floatX](ntrials)
+        self.yDim_in = yDim_in  # dimension of observation input
+        if 'filt_size' in GenerativeParams:
+            self.filt_size = GenerativeParams['filt_size']
+        else:
+            self.filt_size = 3  # PID controller
+
+        # penalty on epsilon (noise on control signal)
+        if 'pen_eps' in GenerativeParams:
+            self.pen_eps = GenerativeParams['pen_eps']
+        else:
+            self.pen_eps = None
+
+        self.DLGM_J = GenerativeParams['DLGM_J']
+        self.yCols = GenerativeParams['yCols']  # which dimensions of Y to predict
+
+        # learnable velocity for each observation dimension
+        if 'log_vel' in GenerativeParams:
+            self.log_vel = theano.shared(value=GenerativeParams['log_vel'].astype(theano.config.floatX),
+                                         name='log_vel', borrow=True)
+        else:
+            self.log_vel = theano.shared(value=np.ones(self.yDim).astype(theano.config.floatX),
+                                         name='log_vel', borrow=True)
+        self.vel = T.exp(self.log_vel)
+
+        # coefficients for PID controller (one for each dimension)
+        self.L = theano.shared(value=np.zeros((self.yDim, self.filt_size),
+                                              dtype=theano.config.floatX))
+
+        # noise coefficients
+        self.log_sigma = theano.shared(value=np.zeros((1, self.yDim),
+                                       dtype=theano.config.floatX),
+                                       name='log_sigma', borrow=True,
+                                       broadcastable=[True, False])
+        self.sigma = T.exp(self.log_sigma)
+        self.log_eps = theano.shared(value=np.zeros((1, self.yDim),
+                                     dtype=theano.config.floatX),
+                                     name='log_eps', borrow=True,
+                                     broadcastable=[True, False])
+        self.eps = T.exp(self.log_eps)
+
+    def get_states(self, data):
+        """
+        Input a time series of positions and include velocities for each
+        coordinate in each row
+        """
+        dims = data.shape[1]
+        positions = data.copy()
+        velocities = data[1:] - data[:-1]
+        velocities = T.vertical_stack(T.zeros((1, dims)), velocities)
+        states = T.horizontal_stack(positions, velocities)
+        return states
+
+    def get_preds(self, Y, training=False, postJ=None):
+        """
+        Return the predicted next J, g, U, and Y for each point in Y.
+
+        postJ is J sampled from posterior, necessary for training.
+        Do not provide for purely generative output.
+        """
+        # get states from position
+        states = self.get_states(Y)
+        # Get external force from DLGM
+        J = self.DLGM_J.get_output(states, training=training,
+                                   postJ=postJ)
+        # Draw next goals based on force
+        innov = J * self.sigma**2 + self.srng.normal(J.shape) * self.sigma
+        next_g = T.cumsum(innov, axis=0)  # include previous goal
+        next_g += Y[0, self.yCols]  #  include initial goal
+        # PID Controller for next control point
+        error = next_g - Y[:, self.yCols]
+        Upred = []
+        for i in range(self.yDim):
+            # get current error signal and corresponding filter
+            signal = error[:, i]
+            filt = self.L[i]
+            # zero pad beginning
+            signal = T.concatenate((T.zeros(self.filt_size - 1), signal))
+            signal = signal.reshape((-1, 1))
+            filt = filt.reshape((-1, 1))
+            res = conv.conv2d(signal, filt, border_mode='valid')
+            Upred.append(res)
+        if len(Upred) > 1:
+            Upred = T.horizontal_stack(*Upred)
+        else:
+            Upred = Upred[0]
+        Upred += self.eps * self.srng.normal(Upred.shape)
+        # get predicted Y
+        Ypred = Y[:, self.yCols] + self.vel.reshape((1, self.yDim)) * T.tanh(Upred)
+
+        return J, next_g, Upred, Ypred
+
+    def getNextState(self, curr_y):
+        """
+        Generate predicted next data point based on given data
+        """
+        _, _, _, Ypred = self.get_preds(curr_y, training=False)
+        Ypred = Ypred[-1]
+        return Ypred
+
+    def fit_trial(self, g, Y_true):
+        '''
+        Return a theano function that calculates a fit for the given data.
+        '''
+        postJ = (g[1:] - g[:-1]) / self.sigma**2
+        postJ += self.srng.normal(postJ.shape) * (1 / self.sigma)
+        _, _, _, Ypred = self.get_preds(Y_true[:-1], training=False,
+                                        postJ=postJ)
+        return Ypred
+
+    def evaluateLogDensity(self, g, Y):
+        '''
+        Return a theano function that evaluates the log-density of the
+        GenerativeModel.
+
+        X: Goal state time series (sample from the recognition model)
+        Y: Time series of positions
+        '''
+        # get q(J|g)
+        postJ = (g[1:] - g[:-1]) / self.sigma**2
+        postJ += self.srng.normal(postJ.shape) * (1 / self.sigma)
+        # Predict control signal and compare against real control
+        U_true = T.arctanh((Y[1:, self.yCols] - Y[:-1, self.yCols]) /
+                           self.vel.reshape((1, self.yDim)))
+        Jpred, g_pred, Upred, Ypred = self.get_preds(Y[:-1], training=True,
+                                                     postJ=postJ)
+        # disregard last prediction bc we don't have ground truth for it
+        resU = U_true - Upred
+        LogDensity = -(resU**2 / (2 * self.eps**2)).sum()
+
+        LogDensity += self.DLGM_J.get_ELBO(postJ, Jpred)
+
+        # prior on goal state
+        res_g = g[1:] - g_pred
+        LogDensity -= (res_g**2 / (2 * self.sigma**2)).sum()
+
+        # prior on eps
+        if self.pen_eps is not None:
+            LogDensity -= self.pen_eps * self.log_eps.sum()
+
+        return LogDensity
+
     def getParams(self):
         '''
         Return parameters of the GenerativeModel.
         '''
-        rets = lasagne.layers.get_all_params(self.NN_Gen, trainable=True)
+        rets = self.DLGM_J.get_params()
         # rets += [self.log_vel]
-        if self.A is None:
-            rets = lasagne.layers.get_all_params(self.NN_A, trainable=True)
-        else:
-            rets += self.A
-        rets += [self.QChol_diag] + [self.Q0Chol_diag]
-        rets += [self.x0]
-        # rets += [self.RChol]
-        rets += [self.trend]
+        rets += [self.L] + [self.log_sigma] + [self.log_eps]
         return rets
 
 
