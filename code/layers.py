@@ -40,12 +40,12 @@ class DLGMLayer(lasagne.layers.Layer):
         # Load recognition/encoding Parameters
         self.mu_net = rec_nets['mu_net']
         self.u_net = rec_nets['u_net']
-        self.log_d_net = rec_nets['log_d_net']
+        self.unc_d_net = rec_nets['unc_d_net']
 
         # add parameters to layer class
         rec_params = (lasagne.layers.get_all_params(self.mu_net) +
                       lasagne.layers.get_all_params(self.u_net) +
-                      lasagne.layers.get_all_params(self.log_d_net))
+                      lasagne.layers.get_all_params(self.unc_d_net))
         for param in rec_params:
             self.add_param(param, param.shape.eval())
 
@@ -56,7 +56,7 @@ class DLGMLayer(lasagne.layers.Layer):
         # get output of rec model
         self.batch_mu = lasagne.layers.get_output(self.mu_net, inputs=postJ)
         self.batch_u = lasagne.layers.get_output(self.u_net, inputs=postJ)
-        self.batch_log_d = lasagne.layers.get_output(self.log_d_net,
+        self.batch_unc_d = lasagne.layers.get_output(self.unc_d_net,
                                                      inputs=postJ)
 
         # add extra dim to batch_u, so it gets treated as column vectors when
@@ -64,22 +64,24 @@ class DLGMLayer(lasagne.layers.Layer):
         self.batch_u = self.batch_u.reshape(
             (self.batch_u.shape[0], self.batch_u.shape[1], 1))
 
-        def get_cov(u, log_d):
+        def get_cov(u, unc_d):
             # convert output of rec model to rank-1 covariance matrix
-            d = T.exp(log_d)
+            # use softplus to get positive constrained d
+            d = T.nnet.softplus(unc_d)
             D_inv = T.diag(1.0 / d)
             eta = 1.0 / (u.T.dot(D_inv).dot(u) + 1.0)
             C = D_inv - eta * D_inv.dot(u).dot(u.T).dot(D_inv)
             Tr_C = T.nlinalg.trace(C)
-            ld_C = T.log(eta) - T.log(T.prod(d))  # eq 20 in DLGM
-            R = (T.sqrt(D_inv) - ((1 - T.sqrt(eta)) / u.T.dot(D_inv)
-                                  .dot(u)) *
+            ld_C = T.log(eta) - T.log(d).sum()  # eq 20 in DLGM
+            R = (T.sqrt(D_inv) - ((1 - T.sqrt(eta) + 1e-6) / (u.T.dot(D_inv)
+                                                               .dot(u) +
+                                                               2e-6)) *  # stability
                  D_inv.dot(u).dot(u.T).dot(T.sqrt(D_inv)))
             return Tr_C, ld_C, R
 
         (self.batch_Tr_C, self.batch_ld_C, self.batch_R), _ = theano.scan(
             fn=get_cov, outputs_info=None, sequences=[self.batch_u,
-                                                      self.batch_log_d])
+                                                      self.batch_unc_d])
         self.batch_xi = (self.batch_mu +
                          T.batched_dot(self.batch_R,
                                        self.srng.normal(

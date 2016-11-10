@@ -83,7 +83,7 @@ class DLGM(object):
                         'u_net': get_network(noutput, outdims, nhidden,
                                              nlayers_rec, None, None,
                                              add_pklayers=False),
-                        'log_d_net': get_network(noutput, outdims, nhidden,
+                        'unc_d_net': get_network(noutput, outdims, nhidden,
                                                  nlayers_rec, None, None,
                                                  add_pklayers=False)}
             self.DLGM_layers.append(DLGMLayer(self.network, outdims, srng,

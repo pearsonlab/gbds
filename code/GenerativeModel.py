@@ -1519,6 +1519,12 @@ class GBDS(GenerativeModel):
         else:
             self.pen_eps = None
 
+        # penalty on goal state leaving game area
+        if 'pen_g' in GenerativeParams:
+            self.pen_g = GenerativeParams['pen_g']
+        else:
+            self.pen_g = None
+
         self.DLGM_J = GenerativeParams['DLGM_J']
         self.yCols = GenerativeParams['yCols']  # which dimensions of Y to predict
 
@@ -1536,16 +1542,16 @@ class GBDS(GenerativeModel):
                                               dtype=theano.config.floatX))
 
         # noise coefficients
-        self.log_sigma = theano.shared(value=np.zeros((1, self.yDim),
+        self.unc_sigma = theano.shared(value=np.zeros((1, self.yDim),
                                        dtype=theano.config.floatX),
-                                       name='log_sigma', borrow=True,
+                                       name='unc_sigma', borrow=True,
                                        broadcastable=[True, False])
-        self.sigma = T.exp(self.log_sigma)
-        self.log_eps = theano.shared(value=np.zeros((1, self.yDim),
+        self.sigma = T.nnet.softplus(self.unc_sigma)
+        self.unc_eps = theano.shared(value=np.zeros((1, self.yDim),
                                      dtype=theano.config.floatX),
-                                     name='log_eps', borrow=True,
+                                     name='unc_eps', borrow=True,
                                      broadcastable=[True, False])
-        self.eps = T.exp(self.log_eps)
+        self.eps = T.nnet.softplus(self.unc_eps)
 
     def get_states(self, data):
         """
@@ -1642,9 +1648,14 @@ class GBDS(GenerativeModel):
         res_g = g[1:] - g_pred
         LogDensity -= (res_g**2 / (2 * self.sigma**2)).sum()
 
+        # linear penalty on goal state escaping game space
+        if self.pen_g is not None:
+            LogDensity -= self.pen_g * T.nnet.relu(g_pred - 2.0).sum()
+            LogDensity -= self.pen_g * T.nnet.relu(-g_pred - 2.0).sum()
+
         # prior on eps
         if self.pen_eps is not None:
-            LogDensity -= self.pen_eps * self.log_eps.sum()
+            LogDensity -= self.pen_eps * self.unc_eps.sum()
 
         return LogDensity
 
@@ -1654,7 +1665,7 @@ class GBDS(GenerativeModel):
         '''
         rets = self.DLGM_J.get_params()
         # rets += [self.log_vel]
-        rets += [self.L] + [self.log_sigma] + [self.log_eps]
+        rets += [self.L] + [self.unc_sigma] + [self.unc_eps]
         return rets
 
 
