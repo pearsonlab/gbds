@@ -66,17 +66,21 @@ class DLGMLayer(lasagne.layers.Layer):
 
         def get_cov(u, unc_d):
             # convert output of rec model to rank-1 covariance matrix
-            # use softplus to get positive constrained d
-            d = T.nnet.softplus(unc_d)
+
+            # use softplus to get positive constrained d, minimum of -15
+            # since softplus will turn low numbers into 0, which become NaNs
+            # when inverted
+            d = T.nnet.softplus(T.maximum(unc_d, -15))
             D_inv = T.diag(1.0 / d)
             eta = 1.0 / (u.T.dot(D_inv).dot(u) + 1.0)
             C = D_inv - eta * D_inv.dot(u).dot(u.T).dot(D_inv)
             Tr_C = T.nlinalg.trace(C)
             ld_C = T.log(eta) - T.log(d).sum()  # eq 20 in DLGM
-            R = (T.sqrt(D_inv) - ((1 - T.sqrt(eta) + 1e-6) / (u.T.dot(D_inv)
-                                                               .dot(u) +
-                                                               2e-6)) *  # stability
-                 D_inv.dot(u).dot(u.T).dot(T.sqrt(D_inv)))
+            # coeff = ((1 - T.sqrt(eta)) / (u.T.dot(D_inv).dot(u)))
+            # simplified coefficient below is more stable as u -> 0
+            # original coefficient from paper is above
+            coeff = eta / (1 + T.sqrt(eta))
+            R = T.sqrt(D_inv) - coeff * D_inv.dot(u).dot(u.T).dot(T.sqrt(D_inv))
             return Tr_C, ld_C, R
 
         (self.batch_Tr_C, self.batch_ld_C, self.batch_R), _ = theano.scan(
