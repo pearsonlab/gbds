@@ -1526,6 +1526,11 @@ class GBDS(GenerativeModel):
             self.pen_g = None
 
         self.DLGM_J = GenerativeParams['DLGM_J']
+        # technically part of the recognition model, but it's here for
+        # convenience
+        self.NN_postJ_mu = GenerativeParams['NN_postJ_mu']
+        self.NN_postJ_sigma = GenerativeParams['NN_postJ_sigma']
+
         self.yCols = GenerativeParams['yCols']  # which dimensions of Y to predict
 
         # learnable velocity for each observation dimension
@@ -1565,7 +1570,8 @@ class GBDS(GenerativeModel):
         states = T.horizontal_stack(positions, velocities)
         return states
 
-    def get_preds(self, Y, training=False, postJ=None):
+    def get_preds(self, Y, training=False, post_g=None, postJ=None,
+                  gen_g=None):
         """
         Return the predicted next J, g, U, and Y for each point in Y.
 
@@ -1578,11 +1584,21 @@ class GBDS(GenerativeModel):
         J = self.DLGM_J.get_output(states, training=training,
                                    postJ=postJ)
         # Draw next goals based on force
-        innov = J * self.sigma**2 + self.srng.normal(J.shape) * self.sigma
-        next_g = T.cumsum(innov, axis=0)  # include previous goal
-        next_g += Y[0, self.yCols]  #  include initial goal
+        if postJ is not None and post_g is not None:
+            next_g = post_g[:-1] + postJ
+        elif gen_g is not None:
+            goal = gen_g[(-1,)] + J[(-1,)]
+            goal += self.srng.normal(goal.shape) * self.sigma
+            next_g = T.vertical_stack(gen_g[1:],
+                                      goal)
+        else:
+            raise Exception("Goal states must be provided " +
+                            "(either posterior or generated)")
         # PID Controller for next control point
-        error = next_g - Y[:, self.yCols]
+        if post_g is not None:
+            error = post_g[1:] - Y[:, self.yCols]
+        else:
+            error = next_g - Y[:, self.yCols]
         Upred = []
         for i in range(self.yDim):
             # get current error signal and corresponding filter
@@ -1598,29 +1614,56 @@ class GBDS(GenerativeModel):
             Upred = T.horizontal_stack(*Upred)
         else:
             Upred = Upred[0]
-        Upred += self.eps * self.srng.normal(Upred.shape)
+        if post_g is None:
+            Upred += self.eps * self.srng.normal(Upred.shape)
         # get predicted Y
         Ypred = Y[:, self.yCols] + self.vel.reshape((1, self.yDim)) * T.tanh(Upred)
 
         return J, next_g, Upred, Ypred
 
-    def getNextState(self, curr_y):
+    def getNextState(self, curr_y, curr_g):
         """
-        Generate predicted next data point based on given data
+        Generate predicted next data point based on given data.
+        Used for generating trials. We keep track of g externally because it
+        is dependent on the previous g.
         """
-        _, _, _, Ypred = self.get_preds(curr_y, training=False)
-        Ypred = Ypred[-1]
-        return Ypred
+        _, g_pred, _, Ypred = self.get_preds(curr_y, gen_g=curr_g)
+        return g_pred[-1], Ypred[-1]
 
     def fit_trial(self, g, Y_true):
         '''
         Return a theano function that calculates a fit for the given data.
         '''
-        postJ = (g[1:] - g[:-1]) / self.sigma**2
-        postJ += self.srng.normal(postJ.shape) * (1 / self.sigma)
+        self.draw_postJ(g)
         _, _, _, Ypred = self.get_preds(Y_true[:-1], training=False,
-                                        postJ=postJ)
+                                        post_g=g,
+                                        postJ=self.postJ)
         return Ypred
+
+    def draw_postJ(self, g):
+        """
+        Calculate posterior of J using current and next goal
+        """
+        # get current and next goal
+        g_stack = T.horizontal_stack(g[:-1], g[1:])
+        self.postJ_mu = lasagne.layers.get_output(self.NN_postJ_mu,
+                                                  inputs=g_stack)
+        batch_unc_sigma = lasagne.layers.get_output(self.NN_postJ_sigma,
+                                                    inputs=g_stack).reshape(
+                                                        (-1, self.yDim,
+                                                         self.yDim))
+
+        def constrain_sigma(unc_sigma):
+            return (T.diag(T.nnet.softplus(T.diag(unc_sigma))) +
+                    T.tril(unc_sigma, k=-1))
+
+        self.postJ_sigma, _ = theano.scan(fn=constrain_sigma,
+                                          outputs_info=None,
+                                          sequences=[batch_unc_sigma])
+        self.postJ = self.postJ_mu + T.batched_dot(self.postJ_sigma,
+                                                   self.srng.normal(
+                                                       (g_stack.shape[0],
+                                                        self.yDim)))
 
     def evaluateLogDensity(self, g, Y):
         '''
@@ -1631,22 +1674,24 @@ class GBDS(GenerativeModel):
         Y: Time series of positions
         '''
         # get q(J|g)
-        postJ = (g[1:] - g[:-1]) / self.sigma**2
-        postJ += self.srng.normal(postJ.shape) * (1 / self.sigma)
+        self.draw_postJ(g)
         # Predict control signal and compare against real control
         U_true = T.arctanh((Y[1:, self.yCols] - Y[:-1, self.yCols]) /
                            self.vel.reshape((1, self.yDim)))
         Jpred, g_pred, Upred, Ypred = self.get_preds(Y[:-1], training=True,
-                                                     postJ=postJ)
+                                                     post_g=g,
+                                                     postJ=self.postJ)
         # disregard last prediction bc we don't have ground truth for it
         resU = U_true - Upred
         LogDensity = -(resU**2 / (2 * self.eps**2)).sum()
+        LogDensity -= 0.5 * T.log(2 * np.pi) + T.log(self.eps).sum()
 
-        LogDensity += self.DLGM_J.get_ELBO(postJ, Jpred)
+        LogDensity += self.DLGM_J.get_ELBO(self.postJ, Jpred)
 
         # prior on goal state
         res_g = g[1:] - g_pred
         LogDensity -= (res_g**2 / (2 * self.sigma**2)).sum()
+        LogDensity -= 0.5 * T.log(2 * np.pi) + T.log(self.sigma).sum()
 
         # linear penalty on goal state escaping game space
         if self.pen_g is not None:
@@ -1664,6 +1709,8 @@ class GBDS(GenerativeModel):
         Return parameters of the GenerativeModel.
         '''
         rets = self.DLGM_J.get_params()
+        rets += lasagne.layers.get_all_params(self.NN_postJ_mu)
+        rets += lasagne.layers.get_all_params(self.NN_postJ_sigma)
         # rets += [self.log_vel]
         rets += [self.L] + [self.unc_sigma] + [self.unc_eps]
         return rets

@@ -68,12 +68,15 @@ class DLGM(object):
             if i == 0:  # first layer, no nonlinearity on input
                 outdims = nhidden
                 nonlin = lasagne.nonlinearities.linear
+                output_layer = False
             elif i == nlayers_gen - 1:  # last layer, output dim
                 outdims = noutput
                 nonlin = lasagne.nonlinearities.rectify
+                output_layer = True
             else:
                 outdims = nhidden
                 nonlin = lasagne.nonlinearities.rectify
+                output_layer = False
             # recognition networks that convert latent to xi for each layer
             # input is J and output is a vector that parametrizes xi
             # dims of xi are equal to the output dims of that layer
@@ -88,6 +91,7 @@ class DLGM(object):
                                                  add_pklayers=False)}
             self.DLGM_layers.append(DLGMLayer(self.network, outdims, srng,
                                               rec_nets, k,
+                                              output_layer=output_layer,
                                               nonlinearity=nonlin))
 
             self.network = self.DLGM_layers[-1]
@@ -124,6 +128,11 @@ class DLGM(object):
         ELBO = 0
         for layer in self.DLGM_layers:
             ELBO += layer.get_ELBO(postJ.shape[0])
+
+        out_layer = self.network
         resJ = postJ - predJ
-        ELBO -= T.sqrt((resJ**2).sum())
+        ELBO -= 0.5 * T.sqrt((T.nlinalg.matrix_inverse(out_layer.G)
+                              .dot(resJ.T)**2).sum())
+        ELBO -= 0.5 * T.log(2 * np.pi)
+        ELBO -= T.log(T.diag(out_layer.G)).sum()
         return ELBO

@@ -18,6 +18,7 @@ class DLGMLayer(lasagne.layers.Layer):
     k (float): regularization term on generative weights
     """
     def __init__(self, incoming, num_units, srng, rec_nets, k,
+                 output_layer=False,
                  param_init=lasagne.init.Normal(0.01),
                  nonlinearity=lasagne.nonlinearities.rectify,
                  **kwargs):
@@ -25,13 +26,16 @@ class DLGMLayer(lasagne.layers.Layer):
         num_inputs = self.input_shape[1]
         self.srng = srng
         self.num_units = num_units
+        self.output_layer = output_layer
 
         # Initialize generative/decoding Parameters
         self.W = self.add_param(param_init, (num_inputs, num_units),
                                 name='W')
         self.b = self.add_param(param_init, (num_units,), name='b')
-        self.G = self.add_param(param_init, (num_units, num_units),
-                                name='G')
+        self.unc_G = self.add_param(param_init, (num_units, num_units),
+                                    name='unc_G')
+        self.G = (T.diag(T.nnet.softplus(T.diag(self.unc_G))) +
+                  T.tril(self.unc_G, k=-1))
         self.nonlinearity = nonlinearity
 
         # regularization term
@@ -113,12 +117,17 @@ class DLGMLayer(lasagne.layers.Layer):
         if use_rec_model:
             # use sample from rec model
             xi = self.batch_xi
-            if add_noise:
+            if add_noise:  # additional noise
                 xi += 0.01 * self.srng.normal(self.batch_xi.shape)
         else:
             # pure random input
             xi = self.srng.normal((input.shape[0], self.num_units))
-        activation += T.dot(xi, self.G)
+        # we want the mean when training, so don't add noise to
+        # output of last layer when training.
+        if not self.output_layer:
+            activation += T.dot(xi, self.G)
+        elif not add_noise:
+            activation += T.dot(xi, self.G)
         return activation
 
     def get_output_shape_for(self, input_shape):
