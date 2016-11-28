@@ -58,10 +58,11 @@ class DLGM(object):
     generative models. Technical report, arXiv:1401.4082, 2014.
     """
     def __init__(self, nlayers_gen, nlayers_rec, ninput, nhidden, noutput,
-                 srng, k, dropout=False):
+                 srng, k, p=None, dropout=False):
         self.DLGM_layers = []
         self.network = lasagne.layers.InputLayer((None, ninput))
         self.dropout = dropout
+        self.p = p  # penalty on noise of output layer
         if self.dropout:
             self.network = lasagne.layers.DropoutLayer(self.network, p=0.2)
         for i in range(nlayers_gen):
@@ -135,4 +136,6 @@ class DLGM(object):
                               .dot(resJ.T)**2).sum())
         ELBO -= 0.5 * T.log(2 * np.pi)
         ELBO -= T.log(T.diag(out_layer.G)).sum()
+        if self.p is not None:
+            ELBO -= self.p * T.abs_(out_layer.G).sum()
         return ELBO
