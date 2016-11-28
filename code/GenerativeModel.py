@@ -1519,6 +1519,12 @@ class GBDS(GenerativeModel):
         else:
             self.pen_eps = None
 
+        # penalty on sigma (noise on control signal)
+        if 'pen_sigma' in GenerativeParams:
+            self.pen_sigma = GenerativeParams['pen_sigma']
+        else:
+            self.pen_sigma = None
+
         # penalty on goal state leaving game area
         if 'pen_g' in GenerativeParams:
             self.pen_g = GenerativeParams['pen_g']
@@ -1701,6 +1707,9 @@ class GBDS(GenerativeModel):
         # prior on eps
         if self.pen_eps is not None:
             LogDensity -= self.pen_eps * self.unc_eps.sum()
+
+        if self.pen_sigma is not None:
+            LogDensity -= self.pen_sigma * self.unc_sigma.sum()
 
         return LogDensity
 
