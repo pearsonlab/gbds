@@ -1591,9 +1591,9 @@ class GBDS(GenerativeModel):
                                    postJ=postJ)
         # Draw next goals based on force
         if postJ is not None and post_g is not None:
-            next_g = post_g[:-1] + postJ
+            next_g = post_g[:-1] + self.sigma**2 * postJ
         elif gen_g is not None:
-            goal = gen_g[(-1,)] + J[(-1,)]
+            goal = gen_g[(-1,)] + self.sigma**2 * J[(-1,)]
             goal += self.srng.normal(goal.shape) * self.sigma
             next_g = T.vertical_stack(gen_g[1:],
                                       goal)
