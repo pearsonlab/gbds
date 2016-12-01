@@ -678,10 +678,10 @@ class SGVB_GBDS():#(Trainable):
                               self.xDim, self.yDim, ntrials,
                               self.srng, self.nrng)
         self.mprior_goalie = GEN_MODEL(gen_params_goalie, self.yDim_goalie,
-                                       self.yDim_goalie, self.yDim, ntrials,
+                                       self.yDim_goalie, self.yDim,
                                        srng=self.srng, nrng=self.nrng)
         self.mprior_ball = GEN_MODEL(gen_params_ball, self.yDim_ball,
-                                     self.yDim_ball, self.yDim, ntrials,
+                                     self.yDim_ball, self.yDim,
                                      srng=self.srng, nrng=self.nrng)
 
         self.isTrainingGenerativeModel = True

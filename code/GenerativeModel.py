@@ -1502,12 +1502,13 @@ class GBDS(GenerativeModel):
     """
     Goal-Based Dynamical System
     """
-    def __init__(self, GenerativeParams, xDim, yDim, yDim_in, ntrials,
+    def __init__(self, GenerativeParams, xDim, yDim, yDim_in,
                  srng=None, nrng=None):
         super(GBDS, self).__init__(GenerativeParams, xDim, yDim, srng, nrng)
-
-        self.ntrials = np.cast[theano.config.floatX](ntrials)
         self.yDim_in = yDim_in  # dimension of observation input
+        self.JDim = self.yDim * 2  # dimension of DLGM output
+        # function that calculates states from positions
+        self.get_states = GenerativeParams['get_states']
         if 'filt_size' in GenerativeParams:
             self.filt_size = GenerativeParams['filt_size']
         else:
@@ -1564,18 +1565,6 @@ class GBDS(GenerativeModel):
                                      broadcastable=[True, False])
         self.eps = T.nnet.softplus(self.unc_eps)
 
-    def get_states(self, data):
-        """
-        Input a time series of positions and include velocities for each
-        coordinate in each row
-        """
-        dims = data.shape[1]
-        positions = data.copy()
-        velocities = data[1:] - data[:-1]
-        velocities = T.vertical_stack(T.zeros((1, dims)), velocities)
-        states = T.horizontal_stack(positions, velocities)
-        return states
-
     def get_preds(self, Y, training=False, post_g=None, postJ=None,
                   gen_g=None):
         """
@@ -1591,10 +1580,16 @@ class GBDS(GenerativeModel):
                                    postJ=postJ)
         # Draw next goals based on force
         if postJ is not None and post_g is not None:
-            next_g = post_g[:-1] + self.sigma**2 * postJ
+            J_mean = postJ[:, :self.yDim]
+            J_scale = T.nnet.softplus(postJ[:, self.yDim:])
+            next_g = (post_g[:-1] + J_scale * J_mean) / (1 + J_scale)
         elif gen_g is not None:
-            goal = gen_g[(-1,)] + self.sigma**2 * J[(-1,)]
-            goal += self.srng.normal(goal.shape) * self.sigma
+            J_mean = J[:, :self.yDim]
+            J_scale = T.nnet.softplus(J[:, self.yDim:])
+            goal = ((gen_g[(-1,)] + J_scale[(-1,)] * J_mean[(-1,)]) /
+                    (1 + J_scale[(-1,)]))
+            var = self.sigma**2 / (1 + J_scale[(-1,)])
+            goal += self.srng.normal(goal.shape) * T.sqrt(var)
             next_g = T.vertical_stack(gen_g[1:],
                                       goal)
         else:
@@ -1656,8 +1651,8 @@ class GBDS(GenerativeModel):
                                                   inputs=g_stack)
         batch_unc_sigma = lasagne.layers.get_output(self.NN_postJ_sigma,
                                                     inputs=g_stack).reshape(
-                                                        (-1, self.yDim,
-                                                         self.yDim))
+                                                        (-1, self.JDim,
+                                                         self.JDim))
 
         def constrain_sigma(unc_sigma):
             return (T.diag(T.nnet.softplus(T.diag(unc_sigma))) +
@@ -1669,7 +1664,7 @@ class GBDS(GenerativeModel):
         self.postJ = self.postJ_mu + T.batched_dot(self.postJ_sigma,
                                                    self.srng.normal(
                                                        (g_stack.shape[0],
-                                                        self.yDim)))
+                                                        self.JDim)))
 
     def evaluateLogDensity(self, g, Y):
         '''
