@@ -18,7 +18,7 @@ class DLGMLayer(lasagne.layers.Layer):
     k (float): regularization term on generative weights
     """
     def __init__(self, incoming, num_units, srng, rec_nets, k,
-                 output_layer=False,
+                 output_layer=False, extra_noise=0.01,
                  param_init=lasagne.init.Normal(0.01),
                  nonlinearity=lasagne.nonlinearities.rectify,
                  **kwargs):
@@ -27,6 +27,7 @@ class DLGMLayer(lasagne.layers.Layer):
         self.srng = srng
         self.num_units = num_units
         self.output_layer = output_layer
+        self.extra_noise = extra_noise
 
         # Initialize generative/decoding Parameters
         self.W = self.add_param(param_init, (num_inputs, num_units),
@@ -118,7 +119,7 @@ class DLGMLayer(lasagne.layers.Layer):
             # use sample from rec model
             xi = self.batch_xi
             if add_noise:  # additional noise
-                xi += 0.01 * self.srng.normal(self.batch_xi.shape)
+                xi += self.extra_noise * self.srng.normal(self.batch_xi.shape)
         else:
             # pure random input
             xi = self.srng.normal((input.shape[0], self.num_units))

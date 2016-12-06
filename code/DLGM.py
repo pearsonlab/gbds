@@ -1,7 +1,7 @@
 import lasagne
 import theano.tensor as T
 from layers import *
-from lasagne.nonlinearities import rectify, linear
+from lasagne.nonlinearities import rectify, linear, tanh
 
 def get_network(input_dim, output_dim, hidden_dim, num_layers,
                 PKLparams, srng, batchnorm=False, is_shooter=False,
@@ -58,7 +58,8 @@ class DLGM(object):
     generative models. Technical report, arXiv:1401.4082, 2014.
     """
     def __init__(self, nlayers_gen, nlayers_rec, ninput, nhidden, noutput,
-                 srng, k, p=None, dropout=False):
+                 srng, k, extra_noise=0.01, p=None, dropout=False,
+                 nonlinearity=rectify, param_init=lasagne.init.Normal(0.01)):
         self.DLGM_layers = []
         self.network = lasagne.layers.InputLayer((None, ninput))
         self.dropout = dropout
@@ -68,15 +69,15 @@ class DLGM(object):
         for i in range(nlayers_gen):
             if i == 0:  # first layer, no nonlinearity on input
                 outdims = nhidden
-                nonlin = lasagne.nonlinearities.linear
+                nonlin = linear
                 output_layer = False
             elif i == nlayers_gen - 1:  # last layer, output dim
                 outdims = noutput
-                nonlin = lasagne.nonlinearities.rectify
+                nonlin = nonlinearity
                 output_layer = True
             else:
                 outdims = nhidden
-                nonlin = lasagne.nonlinearities.rectify
+                nonlin = nonlinearity
                 output_layer = False
             # recognition networks that convert latent to xi for each layer
             # input is J and output is a vector that parametrizes xi
@@ -93,6 +94,7 @@ class DLGM(object):
             self.DLGM_layers.append(DLGMLayer(self.network, outdims, srng,
                                               rec_nets, k,
                                               output_layer=output_layer,
+                                              extra_noise=extra_noise,
                                               nonlinearity=nonlin))
 
             self.network = self.DLGM_layers[-1]
@@ -134,7 +136,6 @@ class DLGM(object):
         resJ = postJ - predJ
         ELBO -= 0.5 * T.sqrt((T.nlinalg.matrix_inverse(out_layer.G)
                               .dot(resJ.T)**2).sum())
-        ELBO -= 0.5 * T.log(2 * np.pi)
         ELBO -= T.log(T.diag(out_layer.G)).sum()
         if self.p is not None:
             ELBO -= self.p * T.abs_(out_layer.G).sum()
