@@ -134,9 +134,9 @@ class DLGM(object):
 
         out_layer = self.network
         resJ = postJ - predJ
-        ELBO -= 0.5 * T.sqrt((T.nlinalg.matrix_inverse(out_layer.G)
-                              .dot(resJ.T)**2).sum())
+        ELBO -= 0.5 * (T.nlinalg.matrix_inverse(out_layer.G)
+                       .dot(resJ.T)**2).sum()
         ELBO -= T.log(T.diag(out_layer.G)).sum()
         if self.p is not None:
-            ELBO -= self.p * T.abs_(out_layer.G).sum()
+            ELBO -= self.p * T.sqrt((out_layer.G**2).sum())
         return ELBO
