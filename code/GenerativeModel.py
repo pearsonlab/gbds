@@ -1509,6 +1509,8 @@ class GBDS(GenerativeModel):
         self.JDim = self.yDim * 2  # dimension of DLGM output
         # function that calculates states from positions
         self.get_states = GenerativeParams['get_states']
+        # number of samples to take from DLGM for each training step
+        self.DLGM_nsamps = GenerativeParams['DLGM_nsamps']
         if 'filt_size' in GenerativeParams:
             self.filt_size = GenerativeParams['filt_size']
         else:
@@ -1573,11 +1575,21 @@ class GBDS(GenerativeModel):
         postJ is J sampled from posterior, necessary for training.
         Do not provide for purely generative output.
         """
+        if training and (post_g is None or postJ is None):
+            raise Exception(
+                "Must provide samples from posteriors during training")
         # get states from position
         states = self.get_states(Y)
         # Get external force from DLGM
-        J = self.DLGM_J.get_output(states, training=training,
-                                   postJ=postJ)
+        if training:
+            Jsamps = []
+            for i in range(self.DLGM_nsamps):
+                Jsamps.append(self.DLGM_J.get_output(states, training=training,
+                                                     postJ=postJ))
+            J = sum(Jsamps) / np.cast[theano.config.floatX](self.DLGM_nsamps)
+        else:
+            J = self.DLGM_J.get_output(states, training=training,
+                                       postJ=postJ)
         # Draw next goals based on force
         if postJ is not None and post_g is not None:
             J_mean = postJ[:, :self.yDim]
@@ -1620,7 +1632,10 @@ class GBDS(GenerativeModel):
         # get predicted Y
         Ypred = Y[:, self.yCols] + self.vel.reshape((1, self.yDim)) * T.tanh(Upred)
 
-        return J, next_g, Upred, Ypred
+        if training:
+            return Jsamps, J, next_g, Upred, Ypred
+        else:
+            return J, next_g, Upred, Ypred
 
     def getNextState(self, curr_y, curr_g):
         """
@@ -1679,15 +1694,16 @@ class GBDS(GenerativeModel):
         # Predict control signal and compare against real control
         U_true = T.arctanh((Y[1:, self.yCols] - Y[:-1, self.yCols]) /
                            self.vel.reshape((1, self.yDim)))
-        Jpred, g_pred, Upred, Ypred = self.get_preds(Y[:-1], training=True,
-                                                     post_g=g,
-                                                     postJ=self.postJ)
+        Jsamps, Jpred, g_pred, Upred, Ypred = self.get_preds(Y[:-1],
+                                                             training=True,
+                                                             post_g=g,
+                                                             postJ=self.postJ)
         # disregard last prediction bc we don't have ground truth for it
         resU = U_true - Upred
         LogDensity = -(resU**2 / (2 * self.eps**2)).sum()
         LogDensity -= 0.5 * T.log(2 * np.pi) + T.log(self.eps).sum()
 
-        LogDensity += self.DLGM_J.get_ELBO(self.postJ, Jpred)
+        LogDensity += self.DLGM_J.get_ELBO(self.postJ, Jsamps)
 
         # prior on goal state
         res_g = g[1:] - g_pred
