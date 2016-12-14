@@ -2,7 +2,7 @@ import lasagne
 import theano.tensor as T
 from layers import *
 from lasagne.nonlinearities import rectify, linear
-from utils import get_network
+from nn_utils import get_network
 
 
 class DLGM(object):

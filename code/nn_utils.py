@@ -1,11 +1,13 @@
 import lasagne
-from lasagne.nonlinearities import rectify, linear, tanh
-from layers import *
+from lasagne.nonlinearities import rectify, linear
+from layers import PKBiasLayer, PKRowBiasLayer
 
 
 def get_network(input_dim, output_dim, hidden_dim, num_layers,
-                PKLparams, srng, batchnorm=False, is_shooter=False,
-                row_sparse=False, add_pklayers=False, filt_size=None):
+                PKLparams=None, srng=None, batchnorm=False, is_shooter=False,
+                row_sparse=False, add_pklayers=False, filt_size=None,
+                hidden_nonlin=rectify, output_nonlin=linear,
+                init_std=1.0):
     """
     Returns a NN with the specified parameters.
     Also returns a list of PKBias layers
@@ -22,7 +24,7 @@ def get_network(input_dim, output_dim, hidden_dim, num_layers,
         # Perform convolution (no pad, no filter flip (for interpretability))
         NN = lasagne.layers.Conv1DLayer(NN, num_filters=hidden_dim, filter_size=filt_size,
                                         pad='valid', flip_filters=False,
-                                        nonlinearity=rectify)
+                                        nonlinearity=hidden_nonlin)
         # rearrange dims for dense layers
         NN = lasagne.layers.DimshuffleLayer(NN, (2, 1))
     for i in range(num_layers):
@@ -36,12 +38,12 @@ def get_network(input_dim, output_dim, hidden_dim, num_layers,
         if i == num_layers - 1:
             NN = lasagne.layers.DenseLayer(NN,
                                            output_dim,
-                                           nonlinearity=linear,
-                                           W=lasagne.init.Normal(std=0.1))
+                                           nonlinearity=output_nonlin,
+                                           W=lasagne.init.Normal(std=init_std))
         else:
             NN = lasagne.layers.DenseLayer(NN,
                                            hidden_dim,
-                                           nonlinearity=rectify,
+                                           nonlinearity=hidden_nonlin,
                                            W=lasagne.init.Orthogonal())
     if add_pklayers:
         return NN, PKbias_layers
