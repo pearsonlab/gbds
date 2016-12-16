@@ -1506,11 +1506,9 @@ class GBDS(GenerativeModel):
                  srng=None, nrng=None):
         super(GBDS, self).__init__(GenerativeParams, xDim, yDim, srng, nrng)
         self.yDim_in = yDim_in  # dimension of observation input
-        self.JDim = self.yDim * 2  # dimension of DLGM output
+        self.JDim = self.yDim * 2  # dimension of CGAN output
         # function that calculates states from positions
         self.get_states = GenerativeParams['get_states']
-        # number of samples to take from DLGM for each training step
-        self.DLGM_nsamps = GenerativeParams['DLGM_nsamps']
         if 'filt_size' in GenerativeParams:
             self.filt_size = GenerativeParams['filt_size']
         else:
@@ -1522,7 +1520,7 @@ class GBDS(GenerativeModel):
         else:
             self.pen_eps = None
 
-        # penalty on sigma (noise on control signal)
+        # penalty on sigma (noise on goal state)
         if 'pen_sigma' in GenerativeParams:
             self.pen_sigma = GenerativeParams['pen_sigma']
         else:
@@ -1534,7 +1532,7 @@ class GBDS(GenerativeModel):
         else:
             self.pen_g = None
 
-        self.DLGM_J = GenerativeParams['DLGM_J']
+        self.CGAN_J = GenerativeParams['CGAN_J']
         # technically part of the recognition model, but it's here for
         # convenience
         self.NN_postJ_mu = GenerativeParams['NN_postJ_mu']
@@ -1580,16 +1578,8 @@ class GBDS(GenerativeModel):
                 "Must provide samples from posteriors during training")
         # get states from position
         states = self.get_states(Y)
-        # Get external force from DLGM
-        if training:
-            Jsamps = []
-            for i in range(self.DLGM_nsamps):
-                Jsamps.append(self.DLGM_J.get_output(states, training=training,
-                                                     postJ=postJ))
-            J = sum(Jsamps) / np.cast[theano.config.floatX](self.DLGM_nsamps)
-        else:
-            J = self.DLGM_J.get_output(states, training=training,
-                                       postJ=postJ)
+        # Get external force from CGAN
+        J = self.CGAN_J.get_generated_data(states)
         # Draw next goals based on force
         if postJ is not None and post_g is not None:
             J_mean = postJ[:, :self.yDim]
@@ -1632,10 +1622,7 @@ class GBDS(GenerativeModel):
         # get predicted Y
         Ypred = Y[:, self.yCols] + self.vel.reshape((1, self.yDim)) * T.tanh(Upred)
 
-        if training:
-            return Jsamps, J, next_g, Upred, Ypred
-        else:
-            return J, next_g, Upred, Ypred
+        return J, next_g, Upred, Ypred
 
     def getNextState(self, curr_y, curr_g):
         """
@@ -1681,12 +1668,31 @@ class GBDS(GenerativeModel):
                                                        (g_stack.shape[0],
                                                         self.JDim)))
 
+    def evaluateGANLoss(self, g, Y, mode='D'):
+        """
+        Evaluate loss of GAN
+        Mode is D for discriminator, G for generator
+        """
+        # get q(J|g)
+        self.draw_postJ(g)
+        states = self.get_states(Y)
+        # Get external force from CGAN
+        J = self.CGAN_J.get_generated_data(states)
+        if mode == 'D':
+            # don't have postJ for last index since it needs g at t+1
+            return self.CGAN_J.get_discr_cost(self.postJ, J[:-1], states[:-1])
+        elif mode == 'G':
+            return self.CGAN_J.get_gen_cost(J, states)
+        else:
+            raise Exception("Invalid mode. Provide 'G' for generator loss " +
+                            "or 'D' for discriminator loss.")
+
     def evaluateLogDensity(self, g, Y):
         '''
         Return a theano function that evaluates the log-density of the
         GenerativeModel.
 
-        X: Goal state time series (sample from the recognition model)
+        g: Goal state time series (sample from the recognition model)
         Y: Time series of positions
         '''
         # get q(J|g)
@@ -1694,16 +1700,14 @@ class GBDS(GenerativeModel):
         # Predict control signal and compare against real control
         U_true = T.arctanh((Y[1:, self.yCols] - Y[:-1, self.yCols]) /
                            self.vel.reshape((1, self.yDim)))
-        Jsamps, Jpred, g_pred, Upred, Ypred = self.get_preds(Y[:-1],
-                                                             training=True,
-                                                             post_g=g,
-                                                             postJ=self.postJ)
+        Jpred, g_pred, Upred, Ypred = self.get_preds(Y[:-1],
+                                                     training=True,
+                                                     post_g=g,
+                                                     postJ=self.postJ)
         # disregard last prediction bc we don't have ground truth for it
         resU = U_true - Upred
         LogDensity = -(resU**2 / (2 * self.eps**2)).sum()
         LogDensity -= 0.5 * T.log(2 * np.pi) + T.log(self.eps).sum()
-
-        LogDensity += self.DLGM_J.get_ELBO(self.postJ, Jsamps)
 
         # prior on goal state
         res_g = g[1:] - g_pred
@@ -1728,8 +1732,7 @@ class GBDS(GenerativeModel):
         '''
         Return parameters of the GenerativeModel.
         '''
-        rets = self.DLGM_J.get_params()
-        rets += lasagne.layers.get_all_params(self.NN_postJ_mu)
+        rets = lasagne.layers.get_all_params(self.NN_postJ_mu)
         rets += lasagne.layers.get_all_params(self.NN_postJ_sigma)
         # rets += [self.log_vel]
         rets += [self.L] + [self.unc_sigma] + [self.unc_eps]

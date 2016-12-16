@@ -687,6 +687,8 @@ class SGVB_GBDS():#(Trainable):
         self.isTrainingGenerativeModel = True
         self.isTrainingSpikeModel = False
         self.isTrainingRecognitionModel = True
+        self.isTrainingGANGenerator = False
+        self.isTrainingGANDiscriminator = False
 
     def getParams(self):
         '''
@@ -701,21 +703,38 @@ class SGVB_GBDS():#(Trainable):
             if self.isTrainingGenerativeModel:
                 params += self.mprior_goalie.getParams()
                 params += self.mprior_ball.getParams()
+            if self.isTrainingGANGenerator:
+                params += self.mprior_ball.CGAN_J.get_gen_params()
+                params += self.mprior_goalie.CGAN_J.get_gen_params()
+            if self.isTrainingGANDiscriminator:
+                params += self.mprior_ball.CGAN_J.get_discr_params()
+                params += self.mprior_goalie.CGAN_J.get_discr_params()
+
         return params
 
-    def EnableGenerativeModelTraining(self):
+    def set_training_mode(self, mode):
         '''
-        Enable training of GenerativeModel parameters.
+        Set training flags for appropriate mode.
+        Options for mode are as follows:
+        'CTRL': Trains the generative and recognition control model jointly
+        'GAN_G': Trains the GAN generator
+        'GAN_D': Trains the GAN discriminator
         '''
-        self.isTrainingGenerativeModel = True
-        print('Enable switching training/test mode in generative model class!\n')
-
-    def DisableGenerativeModelTraining(self):
-        '''
-        Disable training of GenerativeModel parameters.
-        '''
-        self.isTrainingGenerativeModel = False
-        print('Enable switching training/test mode in generative model class!\n')
+        if mode == 'CTRL':
+            self.isTrainingGenerativeModel = True
+            self.isTrainingRecognitionModel = True
+            self.isTrainingGANGenerator = False
+            self.isTrainingGANDiscriminator = False
+        elif mode == 'GAN_G':
+            self.isTrainingGenerativeModel = False
+            self.isTrainingRecognitionModel = False
+            self.isTrainingGANGenerator = True
+            self.isTrainingGANDiscriminator = False
+        elif mode == 'GAN_D':
+            self.isTrainingGenerativeModel = False
+            self.isTrainingRecognitionModel = False
+            self.isTrainingGANGenerator = False
+            self.isTrainingGANDiscriminator = True
 
     def cost(self):
         '''
@@ -723,17 +742,28 @@ class SGVB_GBDS():#(Trainable):
         '''
         if self.isTrainingSpikeModel and self.joint_spikes:
             q = self.mrec.getSample()
-            thecost = self.mprior_ball.evaluateLogDensity(
+            cost = self.mprior_ball.evaluateLogDensity(
                 q[: self.yCols_ball], self.Y, spikes_and_signals=(self.spikes,
                                                                   self.signals))
         else:
             q = self.mrec.getSample()
-            thelik = self.mprior_goalie.evaluateLogDensity(
-                q[:, self.yCols_goalie], self.Y)
-            thelik += self.mprior_ball.evaluateLogDensity(
-                q[:, self.yCols_ball], self.Y)
-            theentropy = self.mrec.evalEntropy()
+            cost = 0
+            if self.isTrainingGenerativeModel or self.isTrainingRecognitionModel:
+                cost += self.mprior_goalie.evaluateLogDensity(
+                    q[:, self.yCols_goalie], self.Y)
+                cost += self.mprior_ball.evaluateLogDensity(
+                    q[:, self.yCols_ball], self.Y)
+            if self.isTrainingRecognitionModel:
+                cost += self.mrec.evalEntropy()
+            if self.isTrainingGANGenerator:
+                cost = self.mprior_ball.evaluateGANLoss(q[:, self.yCols_ball],
+                                                         self.Y, mode='G')
+                cost += self.mprior_goalie.evaluateGANLoss(
+                    q[:, self.yCols_goalie], self.Y, mode='G')
+            if self.isTrainingGANDiscriminator:
+                cost = self.mprior_ball.evaluateGANLoss(q[:, self.yCols_ball],
+                                                        self.Y, mode='D')
+                cost += self.mprior_goalie.evaluateGANLoss(
+                    q[:, self.yCols_goalie], self.Y, mode='D')
 
-            thecost = thelik + theentropy
-
-        return thecost / self.Y.shape[0]
+        return cost / self.Y.shape[0]
