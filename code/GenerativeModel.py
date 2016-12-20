@@ -1579,7 +1579,7 @@ class GBDS(GenerativeModel):
         # get states from position
         states = self.get_states(Y)
         # Get external force from CGAN
-        J = self.CGAN_J.get_generated_data(states)
+        J = self.CGAN_J.get_generated_data(states, training=training)
         # Draw next goals based on force
         if postJ is not None and post_g is not None:
             J_mean = postJ[:, :self.yDim]
@@ -1677,7 +1677,7 @@ class GBDS(GenerativeModel):
         self.draw_postJ(g)
         states = self.get_states(Y)
         # Get external force from CGAN
-        J = self.CGAN_J.get_generated_data(states)
+        J = self.CGAN_J.get_generated_data(states, training=True)
         if mode == 'D':
             # don't have postJ for last index since it needs g at t+1
             return self.CGAN_J.get_discr_cost(self.postJ, J[:-1], states[:-1])

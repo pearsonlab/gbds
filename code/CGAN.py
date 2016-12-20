@@ -15,7 +15,7 @@ class CGAN(object):
     """
     def __init__(self, nlayers_G, nlayers_D, ndims_condition, ndims_noise,
                  ndims_hidden, ndims_data, srng, nonlinearity=rectify,
-                 noise_jitter=0.01, init_std=1.0, extra_noise_s=None):
+                 noise_jitter=0.01, init_std=1.0, extra_noise_c=None):
         # Neural network (G) that generates data to match the real data
         self.gen_net = get_network(ndims_condition + ndims_noise, ndims_data,
                                    ndims_hidden, nlayers_G,
@@ -41,6 +41,18 @@ class CGAN(object):
         self.ndims_hidden = ndims_hidden
         # number of dimensions in the data
         self.ndims_data = ndims_data
+        # scale of added noise to conditions as regularization during training
+        self.extra_noise_c = extra_noise_c
+
+    def fuzz_conditions(self, conditions):
+        """
+        Add noise to conditions (scaled to range)
+        """
+        conditions_range = (conditions.max(axis=0, keepdims=True) -
+                            conditions.min(axis=0, keepdims=True))
+        scaled_noise = (conditions_range * self.extra_noise_c *
+                        self.srng.normal(conditions.shape))
+        return conditions + scaled_noise
 
     def get_noise_sample(self, N):
         """
@@ -64,21 +76,25 @@ class CGAN(object):
         noise += self.noise_jitter * self.srng.uniform(noise.shape)
         return noise
 
-    def get_generated_data(self, condition):
+    def get_generated_data(self, conditions, training=False):
         """
         Return generated sample from G given conditions.
         """
-        noise = self.get_noise_sample(condition.shape[0])
-        inp = T.horizontal_stack(noise, condition)
+        if self.extra_noise_c is not None and training:
+            conditions = self.fuzz_conditions(conditions)
+        noise = self.get_noise_sample(conditions.shape[0])
+        inp = T.horizontal_stack(noise, conditions)
         gen_data = lasagne.layers.get_output(self.gen_net, inputs=inp)
         return gen_data
 
-    def get_discr_probs(self, data, condition):
+    def get_discr_probs(self, data, conditions, training=False):
         """
         Return probabilities of being real data from discriminator network,
         given conditions
         """
-        inp = T.horizontal_stack(data, condition)
+        if self.extra_noise_c is not None and training:
+            conditions = self.fuzz_conditions(conditions)
+        inp = T.horizontal_stack(data, conditions)
         discr_probs = lasagne.layers.get_output(self.discr_net, inputs=inp)
         return discr_probs
 
@@ -88,14 +104,17 @@ class CGAN(object):
     def get_discr_params(self):
         return lasagne.layers.get_all_params(self.discr_net)
 
-    def get_discr_cost(self, real_data, fake_data, condition):
-        real_discr_probs = self.get_discr_probs(real_data, condition)
-        fake_discr_probs = self.get_discr_probs(fake_data, condition)
+    def get_discr_cost(self, real_data, fake_data, conditions):
+        real_discr_probs = self.get_discr_probs(real_data, conditions,
+                                                training=True)
+        fake_discr_probs = self.get_discr_probs(fake_data, conditions,
+                                                training=True)
         cost = (T.log(real_discr_probs + 1e-16).sum() +
                 T.log(1.0 - fake_discr_probs + 1e-16).sum())
         return cost
 
-    def get_gen_cost(self, gen_data, condition):
-        fake_discr_probs = self.get_discr_probs(gen_data, condition)
+    def get_gen_cost(self, gen_data, conditions):
+        fake_discr_probs = self.get_discr_probs(gen_data, conditions,
+                                                training=True)
         cost = T.log(fake_discr_probs + 1e-16).sum()
         return cost
