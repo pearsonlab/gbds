@@ -3,7 +3,7 @@ import lasagne
 import theano.tensor as T
 import numpy as np
 from nn_utils import get_network
-from lasagne.nonlinearities import sigmoid, rectify
+from lasagne.nonlinearities import sigmoid, leaky_rectify
 
 
 class CGAN(object):
@@ -14,7 +14,7 @@ class CGAN(object):
     Arxiv:1411.1784v1, 2014
     """
     def __init__(self, nlayers_G, nlayers_D, ndims_condition, ndims_noise,
-                 ndims_hidden, ndims_data, srng, nonlinearity=rectify,
+                 ndims_hidden, ndims_data, srng, nonlinearity=leaky_rectify,
                  noise_jitter=0.01, init_std=1.0, extra_noise_c=None):
         # Neural network (G) that generates data to match the real data
         self.gen_net = get_network(ndims_condition + ndims_noise, ndims_data,
