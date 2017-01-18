@@ -110,7 +110,7 @@ class CGAN(object):
         fake_discr_probs = self.get_discr_probs(fake_data, conditions,
                                                 training=True)
         cost = (T.log(real_discr_probs + 1e-16).sum() +
-                T.log(1.0 - fake_discr_probs + 1e-16).sum())
+                T.log((1.0 - fake_discr_probs) + 1e-16).sum())
         return cost
 
     def get_gen_cost(self, gen_data, conditions):
