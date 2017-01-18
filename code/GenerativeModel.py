@@ -1526,11 +1526,17 @@ class GBDS(GenerativeModel):
         else:
             self.pen_sigma = None
 
-        # penalty on goal state leaving game area
+        # penalties on goal state passing boundaries
         if 'pen_g' in GenerativeParams:
             self.pen_g = GenerativeParams['pen_g']
         else:
             self.pen_g = None
+
+        # corresponding boundaries for pen_g
+        if 'bounds_g' in GenerativeParams:
+            self.bounds_g = GenerativeParams['bounds_g']
+        else:
+            self.bounds_g = (1.0, 1.5)
 
         self.CGAN_J = GenerativeParams['CGAN_J']
         # technically part of the recognition model, but it's here for
@@ -1716,8 +1722,11 @@ class GBDS(GenerativeModel):
 
         # linear penalty on goal state escaping game space
         if self.pen_g is not None:
-            LogDensity -= self.pen_g * T.nnet.relu(g_pred - 2.0).sum()
-            LogDensity -= self.pen_g * T.nnet.relu(-g_pred - 2.0).sum()
+            LogDensity -= self.pen_g[0] * T.nnet.relu(g_pred - self.bounds_g[0]).sum()
+            LogDensity -= self.pen_g[0] * T.nnet.relu(-g_pred - self.bounds_g[0]).sum()
+
+            LogDensity -= self.pen_g[1] * T.nnet.relu(g_pred - self.bounds_g[1]).sum()
+            LogDensity -= self.pen_g[1] * T.nnet.relu(-g_pred - self.bounds_g[1]).sum()
 
         # prior on eps
         if self.pen_eps is not None:
