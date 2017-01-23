@@ -1530,7 +1530,7 @@ class GBDS(GenerativeModel):
         if 'pen_g' in GenerativeParams:
             self.pen_g = GenerativeParams['pen_g']
         else:
-            self.pen_g = None
+            self.pen_g = (None, None)
 
         # corresponding boundaries for pen_g
         if 'bounds_g' in GenerativeParams:
@@ -1721,10 +1721,10 @@ class GBDS(GenerativeModel):
         LogDensity -= 0.5 * T.log(2 * np.pi) + T.log(self.sigma).sum()
 
         # linear penalty on goal state escaping game space
-        if self.pen_g is not None:
+        if self.pen_g[0] is not None:
             LogDensity -= self.pen_g[0] * T.nnet.relu(g_pred - self.bounds_g[0]).sum()
             LogDensity -= self.pen_g[0] * T.nnet.relu(-g_pred - self.bounds_g[0]).sum()
-
+        if self.pen_g[1] is not None:
             LogDensity -= self.pen_g[1] * T.nnet.relu(g_pred - self.bounds_g[1]).sum()
             LogDensity -= self.pen_g[1] * T.nnet.relu(-g_pred - self.bounds_g[1]).sum()
 
