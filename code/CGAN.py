@@ -14,23 +14,26 @@ class CGAN(object):
     Arxiv:1411.1784v1, 2014
     """
     def __init__(self, nlayers_G, nlayers_D, ndims_condition, ndims_noise,
-                 ndims_hidden, ndims_data, srng, nonlinearity=leaky_rectify,
-                 noise_jitter=0.01, init_std=1.0, extra_noise_c=None):
+                 ndims_hidden, ndims_data, batch_size, srng,
+                 nonlinearity=leaky_rectify, init_std=1.0,
+                 condition_noise=None):
         # Neural network (G) that generates data to match the real data
-        self.gen_net = get_network(ndims_condition + ndims_noise, ndims_data,
+        self.gen_net = get_network(batch_size,
+                                   ndims_condition + ndims_noise, ndims_data,
                                    ndims_hidden, nlayers_G,
                                    init_std=init_std,
                                    hidden_nonlin=nonlinearity)
         # Neural network (D) that generates probability of input data being real
-        self.discr_net = get_network(ndims_condition + ndims_data, 1,
+        self.discr_net = get_network(batch_size,
+                                     ndims_condition + ndims_data, 1,
                                      ndims_hidden, nlayers_D,
                                      init_std=init_std,
                                      hidden_nonlin=nonlinearity,
                                      output_nonlin=sigmoid)
+        # size of minibatches (number of rows)
+        self.batch_size = batch_size
         # symbolic random number generator
         self.srng = srng
-        # how much to randomly jitter stratified samples
-        self.noise_jitter = np.cast[theano.config.floatX](noise_jitter)
         # min and max of noise samples
         self.noise_bounds = (-1, 1)
         # number of dimensions of conditional input
@@ -42,7 +45,7 @@ class CGAN(object):
         # number of dimensions in the data
         self.ndims_data = ndims_data
         # scale of added noise to conditions as regularization during training
-        self.extra_noise_c = extra_noise_c
+        self.condition_noise = condition_noise
 
     def fuzz_conditions(self, conditions):
         """
@@ -50,39 +53,17 @@ class CGAN(object):
         """
         conditions_range = (conditions.max(axis=0, keepdims=True) -
                             conditions.min(axis=0, keepdims=True))
-        scaled_noise = (conditions_range * self.extra_noise_c *
+        scaled_noise = (conditions_range * self.condition_noise *
                         self.srng.normal(conditions.shape))
         return conditions + scaled_noise
-
-    def get_noise_sample(self, N):
-        """
-        Return stratified sample of noise input over defined range
-        """
-        strt_range = np.diff(self.noise_bounds).astype(theano.config.floatX)[0]
-        interval = strt_range / N.astype(theano.config.floatX)
-
-        noise = []
-        for i in range(self.ndims_noise):
-            col = T.arange(self.noise_bounds[0], self.noise_bounds[1],
-                           interval)[:N]
-            col = self.srng.shuffle_row_elements(col)
-            noise.append(col.reshape((-1, 1)))
-
-        if self.ndims_noise > 1:
-            noise = T.horizontal_stack(*noise)
-        else:
-            noise = noise[0]
-
-        noise += self.noise_jitter * self.srng.uniform(noise.shape)
-        return noise
 
     def get_generated_data(self, conditions, training=False):
         """
         Return generated sample from G given conditions.
         """
-        if self.extra_noise_c is not None and training:
+        if self.condition_noise is not None and training:
             conditions = self.fuzz_conditions(conditions)
-        noise = self.get_noise_sample(conditions.shape[0])
+        noise = self.srng.normal((conditions.shape[0], self.ndims_noise))
         inp = T.horizontal_stack(noise, conditions)
         gen_data = lasagne.layers.get_output(self.gen_net, inputs=inp)
         return gen_data
@@ -92,7 +73,7 @@ class CGAN(object):
         Return probabilities of being real data from discriminator network,
         given conditions
         """
-        if self.extra_noise_c is not None and training:
+        if self.condition_noise is not None and training:
             conditions = self.fuzz_conditions(conditions)
         inp = T.horizontal_stack(data, conditions)
         discr_probs = lasagne.layers.get_output(self.discr_net, inputs=inp)

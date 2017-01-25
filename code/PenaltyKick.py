@@ -655,8 +655,11 @@ class SGVB_GBDS():#(Trainable):
 
         #---------------------------------------------------------
         ## actual model parameters
-        # symbolic variables for the data
+        # symbolic variables for VB training
         self.X, self.Y = T.matrices('X', 'Y')
+        # symbolic variables for CGAN training
+        self.J, self.s = T.matrices('J', 's')
+
         # spikes only recorded in shooter
         if 'NN_Spikes' in gen_params_ball:
             self.spikes = T.imatrix('spikes')
@@ -746,6 +749,9 @@ class SGVB_GBDS():#(Trainable):
                 q[: self.yCols_ball], self.Y, spikes_and_signals=(self.spikes,
                                                                   self.signals))
         else:
+            JCols_goalie = range(self.yDim_goalie * 2)
+            JCols_ball = range(self.yDim_goalie * 2,
+                               self.yDim_goalie * 2 + self.yDim_ball * 2)
             q = self.mrec.getSample()
             cost = 0
             if self.isTrainingGenerativeModel or self.isTrainingRecognitionModel:
@@ -756,14 +762,16 @@ class SGVB_GBDS():#(Trainable):
             if self.isTrainingRecognitionModel:
                 cost += self.mrec.evalEntropy()
             if self.isTrainingGANGenerator:
-                cost += self.mprior_ball.evaluateGANLoss(q[:, self.yCols_ball],
-                                                         self.Y, mode='G')
+                cost += self.mprior_ball.evaluateGANLoss(self.J[:, JCols_ball],
+                                                         self.s, mode='G')
                 cost += self.mprior_goalie.evaluateGANLoss(
-                    q[:, self.yCols_goalie], self.Y, mode='G')
+                    self.J[:, JCols_goalie], self.s, mode='G')
             if self.isTrainingGANDiscriminator:
-                cost += self.mprior_ball.evaluateGANLoss(q[:, self.yCols_ball],
-                                                        self.Y, mode='D')
+                cost += self.mprior_ball.evaluateGANLoss(self.J[:, JCols_ball],
+                                                         self.s, mode='D')
                 cost += self.mprior_goalie.evaluateGANLoss(
-                    q[:, self.yCols_goalie], self.Y, mode='D')
-
-        return cost / self.Y.shape[0]
+                    self.J[:, JCols_goalie], self.s, mode='D')
+        if self.isTrainingGenerativeModel or self.isTrainingRecognitionModel:
+            return cost / self.Y.shape[0]
+        else:  # training GAN
+            return cost / self.J.shape[0]

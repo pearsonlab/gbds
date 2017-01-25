@@ -29,6 +29,8 @@ import theano.tensor.slinalg as Tsla
 from theano.tensor.signal import conv
 import numpy as np
 from theano.tensor.shared_randomstreams import RandomStreams
+from CGAN import CGAN
+from lasagne.nonlinearities import leaky_rectify
 
 class GenerativeModel(object):
     '''
@@ -1538,7 +1540,14 @@ class GBDS(GenerativeModel):
         else:
             self.bounds_g = (1.0, 1.5)
 
-        self.CGAN_J = GenerativeParams['CGAN_J']
+        if 'CGAN_J' in GenerativeParams:
+            self.CGAN_J = GenerativeParams['CGAN_J']
+        else:
+            # in this case, you must initiate the CGAN manually using
+            # self.init_CGAN(). This is useful for training the VB
+            # portion of the model, and then training multiple instances
+            # of different CGANs
+            self.CGAN_J = None
         # technically part of the recognition model, but it's here for
         # convenience
         self.NN_postJ_mu = GenerativeParams['NN_postJ_mu']
@@ -1571,6 +1580,15 @@ class GBDS(GenerativeModel):
                                      broadcastable=[True, False])
         self.eps = T.nnet.softplus(self.unc_eps)
 
+    def init_CGAN(self, nlayers_gen, nlayers_discr, state_dim, noise_dim,
+                  hidden_dim, batch_size, nonlinearity=leaky_rectify,
+                  init_std=1.0, condition_noise=0.1):
+        self.CGAN_J = CGAN(nlayers_gen, nlayers_discr, state_dim, noise_dim,
+                           hidden_dim, self.JDim, batch_size, self.srng,
+                           nonlinearity=nonlinearity,
+                           init_std=init_std,
+                           condition_noise=condition_noise)
+
     def get_preds(self, Y, training=False, post_g=None, postJ=None,
                   gen_g=None):
         """
@@ -1584,14 +1602,15 @@ class GBDS(GenerativeModel):
                 "Must provide samples from posteriors during training")
         # get states from position
         states = self.get_states(Y)
-        # Get external force from CGAN
-        J = self.CGAN_J.get_generated_data(states, training=training)
         # Draw next goals based on force
         if postJ is not None and post_g is not None:
+            J = None  # not generating J from CGAN, using sample from posterior
             J_mean = postJ[:, :self.yDim]
             J_scale = T.nnet.softplus(postJ[:, self.yDim:])
             next_g = (post_g[:-1] + J_scale * J_mean) / (1 + J_scale)
         elif gen_g is not None:
+            # Get external force from CGAN
+            J = self.CGAN_J.get_generated_data(states, training=training)
             J_mean = J[:, :self.yDim]
             J_scale = T.nnet.softplus(J[:, self.yDim:])
             goal = ((gen_g[(-1,)] + J_scale[(-1,)] * J_mean[(-1,)]) /
@@ -1636,6 +1655,8 @@ class GBDS(GenerativeModel):
         Used for generating trials. We keep track of g externally because it
         is dependent on the previous g.
         """
+        if self.CGAN_J is None:
+            raise Exception("Must initiate and train CGAN before calling")
         _, g_pred, _, Ypred = self.get_preds(curr_y, gen_g=curr_g)
         return g_pred[-1], Ypred[-1]
 
@@ -1674,21 +1695,20 @@ class GBDS(GenerativeModel):
                                                        (g_stack.shape[0],
                                                         self.JDim)))
 
-    def evaluateGANLoss(self, g, Y, mode='D'):
+    def evaluateGANLoss(self, postJ, states, mode='D'):
         """
         Evaluate loss of GAN
         Mode is D for discriminator, G for generator
         """
-        # get q(J|g)
-        self.draw_postJ(g)
-        states = self.get_states(Y)
+        if self.CGAN_J is None:
+            raise Exception("Must initiate CGAN before calling")
         # Get external force from CGAN
-        J = self.CGAN_J.get_generated_data(states, training=True)
+        genJ = self.CGAN_J.get_generated_data(states, training=True)
         if mode == 'D':
-            # don't have postJ for last index since it needs g at t+1
-            return self.CGAN_J.get_discr_cost(self.postJ, J[:-1], states[:-1])
+            return self.CGAN_J.get_discr_cost(postJ, genJ,
+                                              states)
         elif mode == 'G':
-            return self.CGAN_J.get_gen_cost(J, states)
+            return self.CGAN_J.get_gen_cost(genJ, states)
         else:
             raise Exception("Invalid mode. Provide 'G' for generator loss " +
                             "or 'D' for discriminator loss.")

@@ -3,7 +3,7 @@ from lasagne.nonlinearities import rectify, linear
 from layers import PKBiasLayer, PKRowBiasLayer
 
 
-def get_network(input_dim, output_dim, hidden_dim, num_layers,
+def get_network(batch_size, input_dim, output_dim, hidden_dim, num_layers,
                 PKLparams=None, srng=None, batchnorm=False, is_shooter=False,
                 row_sparse=False, add_pklayers=False, filt_size=None,
                 hidden_nonlin=rectify, output_nonlin=linear,
@@ -13,7 +13,7 @@ def get_network(input_dim, output_dim, hidden_dim, num_layers,
     Also returns a list of PKBias layers
     """
     PKbias_layers = []
-    NN = lasagne.layers.InputLayer((None, input_dim))
+    NN = lasagne.layers.InputLayer((batch_size, input_dim))
     if batchnorm:
         NN = lasagne.layers.BatchNormLayer(NN)
     if filt_size is not None:  # first layer convolution
