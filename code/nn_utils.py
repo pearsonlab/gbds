@@ -1,4 +1,5 @@
 import lasagne
+import numpy as np
 from lasagne.nonlinearities import rectify, linear
 from layers import PKBiasLayer, PKRowBiasLayer
 
@@ -14,8 +15,6 @@ def get_network(batch_size, input_dim, output_dim, hidden_dim, num_layers,
     """
     PKbias_layers = []
     NN = lasagne.layers.InputLayer((batch_size, input_dim))
-    if batchnorm:
-        NN = lasagne.layers.BatchNormLayer(NN)
     if filt_size is not None:  # first layer convolution
         # rearrange dims for convolution
         NN = lasagne.layers.DimshuffleLayer(NN, ('x', 1, 0))
@@ -36,15 +35,24 @@ def get_network(batch_size, input_dim, output_dim, hidden_dim, num_layers,
             PKbias_layers.append(PK_bias)
             NN = PK_bias
         if i == num_layers - 1:
-            NN = lasagne.layers.DenseLayer(NN,
-                                           output_dim,
-                                           nonlinearity=output_nonlin,
-                                           W=lasagne.init.Normal(std=init_std))
+            layer_dim = output_dim
+            layer_nonlin = output_nonlin
         else:
-            NN = lasagne.layers.DenseLayer(NN,
-                                           hidden_dim,
-                                           nonlinearity=hidden_nonlin,
-                                           W=lasagne.init.Orthogonal())
+            layer_dim = hidden_dim
+            layer_nonlin = hidden_nonlin
+
+        if batchnorm and i < num_layers - 1 and i != 0:
+            NN = lasagne.layers.batch_norm(lasagne.layers.DenseLayer(
+                NN,
+                layer_dim,
+                nonlinearity=layer_nonlin,
+                W=lasagne.init.Normal(std=init_std)))
+        else:
+            NN = lasagne.layers.DenseLayer(
+                NN,
+                layer_dim,
+                nonlinearity=layer_nonlin,
+                W=lasagne.init.Normal(std=init_std))
     if add_pklayers:
         return NN, PKbias_layers
     else:

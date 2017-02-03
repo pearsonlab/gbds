@@ -774,4 +774,4 @@ class SGVB_GBDS():#(Trainable):
         if self.isTrainingGenerativeModel or self.isTrainingRecognitionModel:
             return cost / self.Y.shape[0]
         else:  # training GAN
-            return cost / self.J.shape[0]
+            return cost

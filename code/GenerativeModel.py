@@ -1565,11 +1565,14 @@ class GBDS(GenerativeModel):
         self.vel = T.exp(self.log_vel)
 
         # coefficients for PID controller (one for each dimension)
-        self.L = theano.shared(value=np.zeros((self.yDim, self.filt_size),
-                                              dtype=theano.config.floatX))
+        self.unc_L = theano.shared(value=np.zeros((self.yDim, self.filt_size),
+                                   dtype=theano.config.floatX))
+        # constrain lag-1 component to be positive
+        self.L = T.horizontal_stack(T.nnet.softplus(self.unc_L[:, [0]]),
+                                    self.unc_L[:, 1:])
 
         # noise coefficients
-        self.unc_sigma = theano.shared(value=np.zeros((1, self.yDim),
+        self.unc_sigma = theano.shared(value=-7 * np.ones((1, self.yDim),
                                        dtype=theano.config.floatX),
                                        name='unc_sigma', borrow=True,
                                        broadcastable=[True, False])
@@ -1582,12 +1585,17 @@ class GBDS(GenerativeModel):
 
     def init_CGAN(self, nlayers_gen, nlayers_discr, state_dim, noise_dim,
                   hidden_dim, batch_size, nonlinearity=leaky_rectify,
-                  init_std=1.0, condition_noise=0.1):
+                  init_std_G=1.0, init_std_D=0.005,
+                  condition_noise=None,
+                  condition_scale=None, instance_noise=None):
         self.CGAN_J = CGAN(nlayers_gen, nlayers_discr, state_dim, noise_dim,
                            hidden_dim, self.JDim, batch_size, self.srng,
                            nonlinearity=nonlinearity,
-                           init_std=init_std,
-                           condition_noise=condition_noise)
+                           init_std_G=init_std_G,
+                           init_std_D=init_std_D,
+                           condition_noise=condition_noise,
+                           condition_scale=condition_scale,
+                           instance_noise=instance_noise)
 
     def get_preds(self, Y, training=False, post_g=None, postJ=None,
                   gen_g=None):
@@ -1646,6 +1654,7 @@ class GBDS(GenerativeModel):
             Upred += self.eps * self.srng.normal(Upred.shape)
         # get predicted Y
         Ypred = Y[:, self.yCols] + self.vel.reshape((1, self.yDim)) * T.tanh(Upred)
+        # Ypred = Y[:, self.yCols] + self.vel.reshape((1, self.yDim)) * Upred
 
         return J, next_g, Upred, Ypred
 
@@ -1764,7 +1773,7 @@ class GBDS(GenerativeModel):
         rets = lasagne.layers.get_all_params(self.NN_postJ_mu)
         rets += lasagne.layers.get_all_params(self.NN_postJ_sigma)
         # rets += [self.log_vel]
-        rets += [self.L] + [self.unc_sigma] + [self.unc_eps]
+        rets += [self.unc_L] + [self.unc_eps]  #+ [self.unc_sigma]
         return rets
 
 
