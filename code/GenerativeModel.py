@@ -1565,11 +1565,14 @@ class GBDS(GenerativeModel):
         self.vel = T.exp(self.log_vel)
 
         # coefficients for PID controller (one for each dimension)
-        self.unc_L = theano.shared(value=np.zeros((self.yDim, self.filt_size),
-                                   dtype=theano.config.floatX))
+        self.L = theano.shared(value=np.zeros((self.yDim, self.filt_size),
+                               dtype=theano.config.floatX))
+
         # constrain lag-1 component to be positive
-        self.L = T.horizontal_stack(T.nnet.softplus(self.unc_L[:, [0]]),
-                                    self.unc_L[:, 1:])
+        # self.unc_L = theano.shared(value=np.zeros((self.yDim, self.filt_size),
+        #                            dtype=theano.config.floatX))
+        # self.L = T.horizontal_stack(T.nnet.softplus(self.unc_L[:, [0]]),
+        #                             self.unc_L[:, 1:])
 
         # noise coefficients
         self.unc_sigma = theano.shared(value=-7 * np.ones((1, self.yDim),
@@ -1635,7 +1638,13 @@ class GBDS(GenerativeModel):
             error = post_g[1:] - Y[:, self.yCols]
         else:
             error = next_g - Y[:, self.yCols]
-        Upred = []
+
+        # Assume control starts at zero
+        Uprev = T.vertical_stack(T.zeros((1, self.yDim)),
+                                 T.arctanh((Y[1:, self.yCols] -
+                                           Y[:-1, self.yCols]) /
+                                 self.vel.reshape((1, self.yDim))))
+        Udiff = []
         for i in range(self.yDim):
             # get current error signal and corresponding filter
             signal = error[:, i]
@@ -1645,13 +1654,14 @@ class GBDS(GenerativeModel):
             signal = signal.reshape((-1, 1))
             filt = filt.reshape((-1, 1))
             res = conv.conv2d(signal, filt, border_mode='valid')
-            Upred.append(res)
-        if len(Upred) > 1:
-            Upred = T.horizontal_stack(*Upred)
+            Udiff.append(res)
+        if len(Udiff) > 1:
+            Udiff = T.horizontal_stack(*Udiff)
         else:
-            Upred = Upred[0]
+            Udiff = Udiff[0]
         if post_g is None:
-            Upred += self.eps * self.srng.normal(Upred.shape)
+            Udiff += self.eps * self.srng.normal(Udiff.shape)
+        Upred = Uprev + Udiff
         # get predicted Y
         Ypred = Y[:, self.yCols] + self.vel.reshape((1, self.yDim)) * T.tanh(Upred)
         # Ypred = Y[:, self.yCols] + self.vel.reshape((1, self.yDim)) * Upred
@@ -1773,7 +1783,7 @@ class GBDS(GenerativeModel):
         rets = lasagne.layers.get_all_params(self.NN_postJ_mu)
         rets += lasagne.layers.get_all_params(self.NN_postJ_sigma)
         # rets += [self.log_vel]
-        rets += [self.unc_L] + [self.unc_eps]  #+ [self.unc_sigma]
+        rets += [self.L] + [self.unc_eps]  #+ [self.unc_sigma]
         return rets
 
 
