@@ -1565,14 +1565,14 @@ class GBDS(GenerativeModel):
         self.vel = T.exp(self.log_vel)
 
         # coefficients for PID controller (one for each dimension)
-        self.L = theano.shared(value=np.zeros((self.yDim, self.filt_size),
-                               dtype=theano.config.floatX))
+        # self.L = theano.shared(value=np.zeros((self.yDim, self.filt_size),
+        #                        dtype=theano.config.floatX))
 
         # constrain lag-1 component to be positive
-        # self.unc_L = theano.shared(value=np.zeros((self.yDim, self.filt_size),
-        #                            dtype=theano.config.floatX))
-        # self.L = T.horizontal_stack(T.nnet.softplus(self.unc_L[:, [0]]),
-        #                             self.unc_L[:, 1:])
+        self.unc_L = theano.shared(value=np.zeros((self.yDim, self.filt_size),
+                                   dtype=theano.config.floatX))
+        self.L = T.horizontal_stack(T.nnet.softplus(self.unc_L[:, [0]]),
+                                    self.unc_L[:, 1:])
 
         # noise coefficients
         self.unc_sigma = theano.shared(value=-7 * np.ones((1, self.yDim),
@@ -1783,7 +1783,7 @@ class GBDS(GenerativeModel):
         rets = lasagne.layers.get_all_params(self.NN_postJ_mu)
         rets += lasagne.layers.get_all_params(self.NN_postJ_sigma)
         # rets += [self.log_vel]
-        rets += [self.L] + [self.unc_eps]  #+ [self.unc_sigma]
+        rets += [self.unc_L] + [self.unc_eps]  #+ [self.unc_sigma]
         return rets
 
 
