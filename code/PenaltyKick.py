@@ -659,14 +659,8 @@ class SGVB_GBDS():#(Trainable):
         self.X, self.Y = T.matrices('X', 'Y')
         # symbolic variables for CGAN training
         self.J, self.s = T.matrices('J', 's')
-
-        # spikes only recorded in shooter
-        if 'NN_Spikes' in gen_params_ball:
-            self.spikes = T.imatrix('spikes')
-            self.signals = T.ivector('signals')
-            self.joint_spikes = True
-        else:
-            self.joint_spikes = False
+        # symbolic variables for GAN training
+        self.g0 = T.matrix('g0')
 
         self.yCols_goalie = yCols_goalie
         self.yCols_ball = yCols_ball
@@ -688,8 +682,9 @@ class SGVB_GBDS():#(Trainable):
                                      srng=self.srng, nrng=self.nrng)
 
         self.isTrainingGenerativeModel = True
-        self.isTrainingSpikeModel = False
         self.isTrainingRecognitionModel = True
+        self.isTrainingCGANGenerator = False
+        self.isTrainingCGANDiscriminator = False
         self.isTrainingGANGenerator = False
         self.isTrainingGANDiscriminator = False
 
@@ -698,20 +693,23 @@ class SGVB_GBDS():#(Trainable):
         Return Generative and Recognition Model parameters that are currently being trained.
         '''
         params = []
-        if self.isTrainingSpikeModel and self.joint_spikes:
-            params += self.mprior_ball.getParams(spike_model=True)
-        else:
-            if self.isTrainingRecognitionModel:
-                params += self.mrec.getParams()
-            if self.isTrainingGenerativeModel:
-                params += self.mprior_goalie.getParams()
-                params += self.mprior_ball.getParams()
-            if self.isTrainingGANGenerator:
-                params += self.mprior_ball.CGAN_J.get_gen_params()
-                params += self.mprior_goalie.CGAN_J.get_gen_params()
-            if self.isTrainingGANDiscriminator:
-                params += self.mprior_ball.CGAN_J.get_discr_params()
-                params += self.mprior_goalie.CGAN_J.get_discr_params()
+        if self.isTrainingRecognitionModel:
+            params += self.mrec.getParams()
+        if self.isTrainingGenerativeModel:
+            params += self.mprior_goalie.getParams()
+            params += self.mprior_ball.getParams()
+        if self.isTrainingCGANGenerator:
+            params += self.mprior_ball.CGAN_J.get_gen_params()
+            params += self.mprior_goalie.CGAN_J.get_gen_params()
+        if self.isTrainingCGANDiscriminator:
+            params += self.mprior_ball.CGAN_J.get_discr_params()
+            params += self.mprior_goalie.CGAN_J.get_discr_params()
+        if self.isTrainingGANGenerator:
+            params += self.mprior_ball.GAN_g0.get_gen_params()
+            params += self.mprior_goalie.GAN_g0.get_gen_params()
+        if self.isTrainingGANDiscriminator:
+            params += self.mprior_ball.GAN_g0.get_discr_params()
+            params += self.mprior_goalie.GAN_g0.get_discr_params()
 
         return params
 
@@ -720,22 +718,44 @@ class SGVB_GBDS():#(Trainable):
         Set training flags for appropriate mode.
         Options for mode are as follows:
         'CTRL': Trains the generative and recognition control model jointly
+        'CGAN_G': Trains the CGAN generator
+        'CGAN_D': Trains the CGAN discriminator
         'GAN_G': Trains the GAN generator
         'GAN_D': Trains the GAN discriminator
         '''
         if mode == 'CTRL':
             self.isTrainingGenerativeModel = True
             self.isTrainingRecognitionModel = True
+            self.isTrainingCGANGenerator = False
+            self.isTrainingCGANDiscriminator = False
+            self.isTrainingGANGenerator = False
+            self.isTrainingGANDiscriminator = False
+        elif mode == 'CGAN_G':
+            self.isTrainingGenerativeModel = False
+            self.isTrainingRecognitionModel = False
+            self.isTrainingCGANGenerator = True
+            self.isTrainingCGANDiscriminator = False
+            self.isTrainingGANGenerator = False
+            self.isTrainingGANDiscriminator = False
+        elif mode == 'CGAN_D':
+            self.isTrainingGenerativeModel = False
+            self.isTrainingRecognitionModel = False
+            self.isTrainingCGANGenerator = False
+            self.isTrainingCGANDiscriminator = True
             self.isTrainingGANGenerator = False
             self.isTrainingGANDiscriminator = False
         elif mode == 'GAN_G':
             self.isTrainingGenerativeModel = False
             self.isTrainingRecognitionModel = False
+            self.isTrainingCGANGenerator = False
+            self.isTrainingCGANDiscriminator = False
             self.isTrainingGANGenerator = True
             self.isTrainingGANDiscriminator = False
         elif mode == 'GAN_D':
             self.isTrainingGenerativeModel = False
             self.isTrainingRecognitionModel = False
+            self.isTrainingCGANGenerator = False
+            self.isTrainingCGANDiscriminator = False
             self.isTrainingGANGenerator = False
             self.isTrainingGANDiscriminator = True
 
@@ -743,34 +763,38 @@ class SGVB_GBDS():#(Trainable):
         '''
         Compute a one-sample approximation the ELBO (lower bound on marginal likelihood), normalized by batch size (length of Y in first dimension).
         '''
-        if self.isTrainingSpikeModel and self.joint_spikes:
-            q = self.mrec.getSample()
-            cost = self.mprior_ball.evaluateLogDensity(
-                q[: self.yCols_ball], self.Y, spikes_and_signals=(self.spikes,
-                                                                  self.signals))
-        else:
-            JCols_goalie = range(self.yDim_goalie * 2)
-            JCols_ball = range(self.yDim_goalie * 2,
-                               self.yDim_goalie * 2 + self.yDim_ball * 2)
-            q = self.mrec.getSample()
-            cost = 0
-            if self.isTrainingGenerativeModel or self.isTrainingRecognitionModel:
-                cost += self.mprior_goalie.evaluateLogDensity(
-                    q[:, self.yCols_goalie], self.Y)
-                cost += self.mprior_ball.evaluateLogDensity(
-                    q[:, self.yCols_ball], self.Y)
-            if self.isTrainingRecognitionModel:
-                cost += self.mrec.evalEntropy()
-            if self.isTrainingGANGenerator:
-                cost += self.mprior_ball.evaluateGANLoss(self.J[:, JCols_ball],
-                                                         self.s, mode='G')
-                cost += self.mprior_goalie.evaluateGANLoss(
-                    self.J[:, JCols_goalie], self.s, mode='G')
-            if self.isTrainingGANDiscriminator:
-                cost += self.mprior_ball.evaluateGANLoss(self.J[:, JCols_ball],
-                                                         self.s, mode='D')
-                cost += self.mprior_goalie.evaluateGANLoss(
-                    self.J[:, JCols_goalie], self.s, mode='D')
+        JCols_goalie = range(self.yDim_goalie * 2)
+        JCols_ball = range(self.yDim_goalie * 2,
+                           self.yDim_goalie * 2 + self.yDim_ball * 2)
+        q = self.mrec.getSample()
+        cost = 0
+        if self.isTrainingGenerativeModel or self.isTrainingRecognitionModel:
+            cost += self.mprior_goalie.evaluateLogDensity(
+                q[:, self.yCols_goalie], self.Y)
+            cost += self.mprior_ball.evaluateLogDensity(
+                q[:, self.yCols_ball], self.Y)
+        if self.isTrainingRecognitionModel:
+            cost += self.mrec.evalEntropy()
+        if self.isTrainingCGANGenerator:
+            cost += self.mprior_ball.evaluateCGANLoss(self.J[:, JCols_ball],
+                                                      self.s, mode='G')
+            cost += self.mprior_goalie.evaluateCGANLoss(
+                self.J[:, JCols_goalie], self.s, mode='G')
+        if self.isTrainingCGANDiscriminator:
+            cost += self.mprior_ball.evaluateCGANLoss(self.J[:, JCols_ball],
+                                                      self.s, mode='D')
+            cost += self.mprior_goalie.evaluateCGANLoss(
+                self.J[:, JCols_goalie], self.s, mode='D')
+        if self.isTrainingGANGenerator:
+            cost += self.mprior_ball.evaluateGANLoss(self.g0[:, self.yCols_ball],
+                                                     mode='G')
+            cost += self.mprior_goalie.evaluateGANLoss(
+                self.g0[:, self.yCols_goalie], mode='G')
+        if self.isTrainingGANDiscriminator:
+            cost += self.mprior_ball.evaluateGANLoss(self.g0[:, self.yCols_ball],
+                                                     mode='D')
+            cost += self.mprior_goalie.evaluateGANLoss(
+                self.g0[:, self.yCols_goalie], mode='D')
         if self.isTrainingGenerativeModel or self.isTrainingRecognitionModel:
             return cost / self.Y.shape[0]
         else:  # training GAN

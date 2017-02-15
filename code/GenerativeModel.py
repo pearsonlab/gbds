@@ -29,7 +29,7 @@ import theano.tensor.slinalg as Tsla
 from theano.tensor.signal import conv
 import numpy as np
 from theano.tensor.shared_randomstreams import RandomStreams
-from CGAN import CGAN
+from CGAN import CGAN, WGAN
 from lasagne.nonlinearities import leaky_rectify
 
 class GenerativeModel(object):
@@ -1600,6 +1600,17 @@ class GBDS(GenerativeModel):
                            condition_scale=condition_scale,
                            instance_noise=instance_noise)
 
+    def init_GAN(self, nlayers_gen, nlayers_discr, noise_dim,
+                 hidden_dim, batch_size, nonlinearity=leaky_rectify,
+                 init_std_G=1.0, init_std_D=0.005,
+                 instance_noise=None):
+        self.GAN_g0 = WGAN(nlayers_gen, nlayers_discr, noise_dim,
+                           hidden_dim, self.yDim, batch_size, self.srng,
+                           nonlinearity=nonlinearity,
+                           init_std_G=init_std_G,
+                           init_std_D=init_std_D,
+                           instance_noise=instance_noise)
+
     def get_preds(self, Y, training=False, post_g=None, postJ=None,
                   gen_g=None):
         """
@@ -1714,7 +1725,25 @@ class GBDS(GenerativeModel):
                                                        (g_stack.shape[0],
                                                         self.JDim)))
 
-    def evaluateGANLoss(self, postJ, states, mode='D'):
+    def evaluateGANLoss(self, post_g0, mode='D'):
+        """
+        Evaluate loss of GAN
+        Mode is D for discriminator, G for generator
+        """
+        if self.GAN_g0 is None:
+            raise Exception("Must initiate GAN before calling")
+        # Get external force from CGAN
+        gen_g0 = self.GAN_g0.get_generated_data(post_g0.shape[0],
+                                                training=True)
+        if mode == 'D':
+            return self.GAN_g0.get_discr_cost(post_g0, gen_g0)
+        elif mode == 'G':
+            return self.GAN_g0.get_gen_cost(gen_g0)
+        else:
+            raise Exception("Invalid mode. Provide 'G' for generator loss " +
+                            "or 'D' for discriminator loss.")
+
+    def evaluateCGANLoss(self, postJ, states, mode='D'):
         """
         Evaluate loss of GAN
         Mode is D for discriminator, G for generator
