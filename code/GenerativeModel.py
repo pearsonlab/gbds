@@ -1511,10 +1511,6 @@ class GBDS(GenerativeModel):
         self.JDim = self.yDim * 2  # dimension of CGAN output
         # function that calculates states from positions
         self.get_states = GenerativeParams['get_states']
-        if 'filt_size' in GenerativeParams:
-            self.filt_size = GenerativeParams['filt_size']
-        else:
-            self.filt_size = 3  # PID controller
 
         # penalty on epsilon (noise on control signal)
         if 'pen_eps' in GenerativeParams:
@@ -1565,14 +1561,28 @@ class GBDS(GenerativeModel):
         self.vel = T.exp(self.log_vel)
 
         # coefficients for PID controller (one for each dimension)
-        # self.L = theano.shared(value=np.zeros((self.yDim, self.filt_size),
-        #                        dtype=theano.config.floatX))
+        # https://en.wikipedia.org/wiki/PID_controller#Discrete_implementation
+        unc_Kp = theano.shared(value=np.zeros((self.yDim, 1),
+                                              dtype=theano.config.floatX),
+                               name='unc_Kp', borrow=True)
+        unc_Ki = theano.shared(value=np.zeros((self.yDim, 1),
+                                              dtype=theano.config.floatX),
+                               name='unc_Ki', borrow=True)
+        unc_Kd = theano.shared(value=np.zeros((self.yDim, 1),
+                                              dtype=theano.config.floatX),
+                               name='unc_Kd', borrow=True)
 
-        # constrain lag-1 component to be positive
-        self.unc_L = theano.shared(value=np.zeros((self.yDim, self.filt_size),
-                                   dtype=theano.config.floatX))
-        self.L = T.horizontal_stack(T.nnet.softplus(self.unc_L[:, [0]]),
-                                    self.unc_L[:, 1:])
+        self.PID_params = [unc_Kp, unc_Ki, unc_Kd]
+
+        self.Kp = T.nnet.softplus(unc_Kp)
+        self.Ki = T.nnet.softplus(unc_Ki)
+        self.Kd = T.nnet.softplus(unc_Kd)
+
+        t_coeff = self.Kp + self.Ki + self.Kd
+        t1_coeff = -self.Kp - 2 * self.Kd
+        t2_coeff = self.Kd
+
+        self.L = T.horizontal_stack(t_coeff, t1_coeff, t2_coeff)
 
         # noise coefficients
         self.unc_sigma = theano.shared(value=-7 * np.ones((1, self.yDim),
@@ -1661,7 +1671,7 @@ class GBDS(GenerativeModel):
             signal = error[:, i]
             filt = self.L[i]
             # zero pad beginning
-            signal = T.concatenate((T.zeros(self.filt_size - 1), signal))
+            signal = T.concatenate((T.zeros(2), signal))
             signal = signal.reshape((-1, 1))
             filt = filt.reshape((-1, 1))
             res = conv.conv2d(signal, filt, border_mode='valid')
@@ -1812,7 +1822,7 @@ class GBDS(GenerativeModel):
         rets = lasagne.layers.get_all_params(self.NN_postJ_mu)
         rets += lasagne.layers.get_all_params(self.NN_postJ_sigma)
         # rets += [self.log_vel]
-        rets += [self.unc_L] + [self.unc_eps]  #+ [self.unc_sigma]
+        rets += self.PID_params + [self.unc_eps]  #+ [self.unc_sigma]
         return rets
 
 
