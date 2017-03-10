@@ -119,13 +119,10 @@ class SmoothingLDSTimeSeries(RecognitionModel):
 
         # This is the neural network that parameterizes the state mean, mu
         self.NN_Mu = RecognitionParams['NN_Mu']['network']
-        self.PKbias_layers_mu = RecognitionParams['NN_Mu']['PKbias_layers']
 
         self.NN_Lambda = RecognitionParams['NN_Lambda']['network']
-        self.PKbias_layers_lambda = RecognitionParams['NN_Lambda']['PKbias_layers']
 
         self.NN_LambdaX = RecognitionParams['NN_LambdaX']['network']
-        self.PKbias_layers_lambdaX = RecognitionParams['NN_LambdaX']['PKbias_layers']
 
         # Mu will automatically be of size [T x xDim]
         self.Mu = lasagne.layers.get_output(self.NN_Mu, inputs = self.Input)
@@ -202,15 +199,6 @@ class SmoothingLDSTimeSeries(RecognitionModel):
             entropy += self.p * T.log(T.diag(self.Qinv)).sum()
             entropy += self.p * T.log(T.diag(self.Q0inv)).sum()
 
-        # prior on PK biases
-        for pklayer in self.PKbias_layers_mu:
-            entropy += pklayer.get_ELBO(self.ntrials)
-
-        for pklayer in self.PKbias_layers_lambda:
-            entropy += pklayer.get_ELBO(self.ntrials)
-
-        for pklayer in self.PKbias_layers_lambdaX:
-            entropy += pklayer.get_ELBO(self.ntrials)
         return entropy
 
     def getDynParams(self):
