@@ -1,9 +1,7 @@
-import theano
 import lasagne
 import theano.tensor as T
-import numpy as np
 from nn_utils import get_network
-from lasagne.nonlinearities import sigmoid, leaky_rectify
+from lasagne.nonlinearities import leaky_rectify
 
 
 class CGAN(object):
@@ -28,7 +26,7 @@ class CGAN(object):
                                    init_std=init_std_G,
                                    hidden_nonlin=nonlinearity,
                                    batchnorm=True)
-        # Neural network (D) that generates probability of input data being real
+        # Neural network (D) that discriminates between real and generated data
         self.discr_net = get_network(batch_size,
                                      ndims_condition + ndims_data, 1,
                                      ndims_hidden, nlayers_D,
@@ -73,7 +71,7 @@ class CGAN(object):
                                              deterministic=(not training))
         return gen_data
 
-    def get_discr_probs(self, data, conditions, training=False):
+    def get_discr_vals(self, data, conditions, training=False):
         """
         Return probabilities of being real data from discriminator network,
         given conditions
@@ -98,16 +96,16 @@ class CGAN(object):
         return lasagne.layers.get_all_params(self.discr_net, trainable=True)
 
     def get_discr_cost(self, real_data, fake_data, conditions):
-        real_discr_out = self.get_discr_probs(real_data, conditions,
-                                              training=True)
-        fake_discr_out = self.get_discr_probs(fake_data, conditions,
-                                              training=True)
+        real_discr_out = self.get_discr_vals(real_data, conditions,
+                                             training=True)
+        fake_discr_out = self.get_discr_vals(fake_data, conditions,
+                                             training=True)
         cost = real_discr_out.mean() - fake_discr_out.mean()
         return cost
 
     def get_gen_cost(self, gen_data, conditions):
-        fake_discr_out = self.get_discr_probs(gen_data, conditions,
-                                              training=True)
+        fake_discr_out = self.get_discr_vals(gen_data, conditions,
+                                             training=True)
         cost = fake_discr_out.mean()
         return cost
 
@@ -128,7 +126,7 @@ class WGAN(object):
                                    init_std=init_std_G,
                                    hidden_nonlin=nonlinearity,
                                    batchnorm=True)
-        # Neural network (D) that generates probability of input data being real
+        # Neural network (D) that discriminates between real and generated data
         self.discr_net = get_network(batch_size,
                                      ndims_data, 1,
                                      ndims_hidden, nlayers_D,
@@ -159,7 +157,7 @@ class WGAN(object):
                                              deterministic=(not training))
         return gen_data
 
-    def get_discr_probs(self, data, training=False):
+    def get_discr_vals(self, data, training=False):
         """
         Return probabilities of being real data from discriminator network
         """
@@ -177,15 +175,15 @@ class WGAN(object):
         return lasagne.layers.get_all_params(self.discr_net, trainable=True)
 
     def get_discr_cost(self, real_data, fake_data):
-        real_discr_out = self.get_discr_probs(real_data,
-                                              training=True)
-        fake_discr_out = self.get_discr_probs(fake_data,
-                                              training=True)
+        real_discr_out = self.get_discr_vals(real_data,
+                                             training=True)
+        fake_discr_out = self.get_discr_vals(fake_data,
+                                             training=True)
         cost = real_discr_out.mean() - fake_discr_out.mean()
         return cost
 
     def get_gen_cost(self, gen_data):
-        fake_discr_out = self.get_discr_probs(gen_data,
-                                              training=True)
+        fake_discr_out = self.get_discr_vals(gen_data,
+                                             training=True)
         cost = fake_discr_out.mean()
         return cost
