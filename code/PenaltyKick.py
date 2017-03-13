@@ -42,12 +42,10 @@ class SGVB_GBDS():#(Trainable):
     gen_params_goalie     - Dictionary of parameters that define the chosen GenerativeModel
                             for the goalie in penaltyshot
                             Look inside the class for details on what to include.
-    GEN_MODEL        - A class that inherits from the GenerativeModel abstract class
     yCols_ball       - Dimensions of Y that correspond to ball coordinates
     yCols_goalie     - Dimenstions of Y that correspond to goalie coordinates
     gen_params       - Dictionary of parameters that define the chosen RecognitionModel.
                        Look inside the class for details on what to include.
-    REC_MODEL        - A class that inherits from the RecognitionModel abstract class
     ntrials          - Number of trials in the training dataset
 
     --------------------------------------------------------------------------
@@ -61,8 +59,8 @@ class SGVB_GBDS():#(Trainable):
     * Doubly stochastic variational bayes for non-conjugate inference.
            - Titsias and Lazaro-Gredilla (ICML, 2014)
     '''
-    def __init__(self, gen_params_ball, gen_params_goalie, GEN_MODEL,
-                 yCols_ball, yCols_goalie, rec_params, REC_MODEL, ntrials):
+    def __init__(self, gen_params_ball, gen_params_goalie, yCols_ball,
+                 yCols_goalie, rec_params, ntrials):
         # instantiate rng's
         self.srng = RandomStreams(seed=234)
         self.nrng = np.random.RandomState(124)
@@ -82,17 +80,16 @@ class SGVB_GBDS():#(Trainable):
         self.yDim = self.yDim_goalie + self.yDim_ball
         self.xDim = self.yDim
 
-
         # instantiate our prior and recognition models
-        self.mrec = REC_MODEL(rec_params, self.Y,
-                              self.xDim, self.yDim, ntrials,
-                              self.srng, self.nrng)
-        self.mprior_goalie = GEN_MODEL(gen_params_goalie, self.yDim_goalie,
-                                       self.yDim_goalie, self.yDim,
-                                       srng=self.srng, nrng=self.nrng)
-        self.mprior_ball = GEN_MODEL(gen_params_ball, self.yDim_ball,
-                                     self.yDim_ball, self.yDim,
-                                     srng=self.srng, nrng=self.nrng)
+        self.mrec = SmoothingPastLDSTimeSeries(rec_params, self.Y, self.xDim,
+                                               self.yDim, ntrials, self.srng,
+                                               self.nrng)
+        self.mprior_goalie = GBDS(gen_params_goalie,
+                                  self.yDim_goalie, self.yDim,
+                                  srng=self.srng, nrng=self.nrng)
+        self.mprior_ball = GBDS(gen_params_ball,
+                                self.yDim_ball, self.yDim,
+                                srng=self.srng, nrng=self.nrng)
 
         self.isTrainingGenerativeModel = True
         self.isTrainingRecognitionModel = True
@@ -103,7 +100,8 @@ class SGVB_GBDS():#(Trainable):
 
     def getParams(self):
         '''
-        Return Generative and Recognition Model parameters that are currently being trained.
+        Return Generative and Recognition Model parameters that are currently
+        being trained.
         '''
         params = []
         if self.isTrainingRecognitionModel:
