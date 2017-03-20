@@ -346,7 +346,7 @@ class GBDS(GenerativeModel):
                            instance_noise=instance_noise)
 
     def get_preds(self, Y, training=False, post_g=None, postJ=None,
-                  gen_g=None):
+                  gen_g=None, extra_conds=None):
         """
         Return the predicted next J, g, U, and Y for each point in Y.
 
@@ -358,8 +358,6 @@ class GBDS(GenerativeModel):
         if training and (post_g is None or postJ is None):
             raise Exception(
                 "Must provide samples from posteriors during training")
-        # get states from position
-        states = self.get_states(Y)
         # Draw next goals based on force
         if postJ is not None and post_g is not None:
             J = None  # not generating J from CGAN, using sample from posterior
@@ -367,6 +365,10 @@ class GBDS(GenerativeModel):
             J_scale = T.nnet.softplus(postJ[:, self.yDim:])
             next_g = (post_g[:-1] + J_scale * J_mean) / (1 + J_scale)
         elif gen_g is not None:
+            # get states from position
+            states = self.get_states(Y)
+            if extra_conds is not None:
+                states = T.horizontal_stack(states, extra_conds)
             # Get external force from CGAN
             J = self.CGAN_J.get_generated_data(states, training=training)
             J_mean = J[:, :self.yDim]
@@ -415,7 +417,7 @@ class GBDS(GenerativeModel):
 
         return J, next_g, Upred, Ypred
 
-    def getNextState(self, curr_y, curr_g):
+    def getNextState(self, curr_y, curr_g, extra_conds=None):
         """
         Generate predicted next data point based on given data.
         Used for generating trials. We keep track of g externally because it
@@ -423,7 +425,8 @@ class GBDS(GenerativeModel):
         """
         if self.CGAN_J is None:
             raise Exception("Must initiate and train CGAN before calling")
-        _, g_pred, _, Ypred = self.get_preds(curr_y, gen_g=curr_g)
+        _, g_pred, _, Ypred = self.get_preds(curr_y, gen_g=curr_g,
+                                             extra_conds=extra_conds)
         return g_pred[-1], Ypred[-1]
 
     def fit_trial(self, g, Y_true):
