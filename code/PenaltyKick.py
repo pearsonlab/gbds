@@ -77,7 +77,7 @@ class SGVB_GBDS():#(Trainable):
         self.yCols_ball = yCols_ball
         self.yDim_goalie = len(self.yCols_goalie)
         self.yDim_ball = len(self.yCols_ball)
-        self.yDim = self.yDim_goalie + self.yDim_ball
+        self.yDim = self.Y.shape[1]
         self.xDim = self.yDim
 
         # instantiate our prior and recognition models
