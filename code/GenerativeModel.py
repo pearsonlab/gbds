@@ -397,12 +397,11 @@ class GBDS(GenerativeModel):
         for i in range(self.yDim):
             # get current error signal and corresponding filter
             signal = error[:, i]
-            filt = self.L[i]
+            filt = self.L[i].reshape((1, 1, -1, 1))
             # zero pad beginning
-            signal = T.concatenate((T.zeros(2), signal))
-            signal = signal.reshape((-1, 1))
-            filt = filt.reshape((-1, 1))
-            res = conv.conv2d(signal, filt, border_mode='valid')
+            signal = T.concatenate((T.zeros(2), signal)).reshape((1, 1, -1, 1))
+            res = T.nnet.conv2d(signal, filt, border_mode='valid')
+            res = res.reshape((-1, 1))
             Udiff.append(res)
         if len(Udiff) > 1:
             Udiff = T.horizontal_stack(*Udiff)
