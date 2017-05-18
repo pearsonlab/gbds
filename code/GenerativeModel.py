@@ -276,11 +276,14 @@ class GBDS(GenerativeModel):
                                name='unc_Kd', borrow=True)
 
         # create list of PID controller parameters for easy access in getParams
+        # self.PID_params = [unc_Kp]
         self.PID_params = [unc_Kp, unc_Ki, unc_Kd]
 
         # constrain PID controller parameters to be positive
         self.Kp = T.nnet.softplus(unc_Kp)
+        # self.Ki = unc_Ki
         self.Ki = T.nnet.softplus(unc_Ki)
+        # self.Kd = unc_Kd
         self.Kd = T.nnet.softplus(unc_Kd)
 
         # calculate coefficients to be placed in convolutional filter
@@ -299,7 +302,7 @@ class GBDS(GenerativeModel):
         self.sigma = T.nnet.softplus(self.unc_sigma)
 
         # noise coefficient on control signals
-        self.unc_eps = theano.shared(value=np.zeros((1, self.yDim),
+        self.unc_eps = theano.shared(value=-11 * np.ones((1, self.yDim),
                                      dtype=theano.config.floatX),
                                      name='unc_eps', borrow=True,
                                      broadcastable=[True, False])
