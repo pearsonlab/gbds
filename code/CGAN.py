@@ -29,14 +29,16 @@ from lasagne.nonlinearities import leaky_rectify
 class CGAN(object):
     """
     Conditional Generative Adversarial Network
-
-    Uses Wasserstein GAN formulation
-
     Mirza, Mehdi, Osindero, Simon, Conditional generative adversarial nets,
     Arxiv:1411.1784v1, 2014
+
+    Uses Improved Wasserstein GAN formulation
+    Gulrajani, Ishaan, et al. "Improved Training of Wasserstein GANs."
+    arXiv preprint arXiv:1704.00028 (2017).
     """
     def __init__(self, nlayers_G, nlayers_D, ndims_condition, ndims_noise,
                  ndims_hidden, ndims_data, batch_size, srng,
+                 lmbda=10.0,
                  nonlinearity=leaky_rectify, init_std_G=1.0,
                  init_std_D=0.005,
                  condition_noise=None, condition_scale=None,
@@ -54,7 +56,9 @@ class CGAN(object):
                                      ndims_hidden, nlayers_D,
                                      init_std=init_std_D,
                                      hidden_nonlin=nonlinearity,
-                                     batchnorm=True)
+                                     batchnorm=False)
+        # lambda hyperparam (scale of gradient penalty)
+        self.lmbda = lmbda
         # size of minibatches (number of rows)
         self.batch_size = batch_size
         # symbolic random number generator
@@ -123,6 +127,16 @@ class CGAN(object):
         fake_discr_out = self.get_discr_vals(fake_data, conditions,
                                              training=True)
         cost = real_discr_out.mean() - fake_discr_out.mean()
+
+        #  Gradient penalty from "Improved Training of Wasserstein GANs"
+        alpha = self.srng.uniform((self.batch_size, 1))
+        interpolates = alpha * real_data + ((1 - alpha) * fake_data)
+        interp_discr_out = self.get_discr_vals(interpolates, conditions,
+                                               training=True)
+        gradients = T.grad(interp_discr_out.sum(), interpolates)
+        slopes = T.sqrt((gradients**2).sum(axis=1))  # gradient norms
+        gradient_penalty = T.mean((slopes - 1)**2)
+        cost -= self.lmbda * gradient_penalty
         return cost
 
     def get_gen_cost(self, gen_data, conditions):
@@ -135,9 +149,14 @@ class CGAN(object):
 class WGAN(object):
     """
     Wasserstein Generative Adversarial Network
+
+    Uses Improved Wasserstein GAN formulation
+    Gulrajani, Ishaan, et al. "Improved Training of Wasserstein GANs."
+    arXiv preprint arXiv:1704.00028 (2017).
     """
     def __init__(self, nlayers_G, nlayers_D, ndims_noise,
                  ndims_hidden, ndims_data, batch_size, srng,
+                 lmbda=10.0,
                  nonlinearity=leaky_rectify, init_std_G=1.0,
                  init_std_D=0.005,
                  instance_noise=None):
@@ -154,7 +173,9 @@ class WGAN(object):
                                      ndims_hidden, nlayers_D,
                                      init_std=init_std_D,
                                      hidden_nonlin=nonlinearity,
-                                     batchnorm=True)
+                                     batchnorm=False)
+        # lambda hyperparam (scale of gradient penalty)
+        self.lmbda = lmbda
         # size of minibatches (number of rows)
         self.batch_size = batch_size
         # symbolic random number generator
@@ -202,6 +223,16 @@ class WGAN(object):
         fake_discr_out = self.get_discr_vals(fake_data,
                                              training=True)
         cost = real_discr_out.mean() - fake_discr_out.mean()
+
+        #  Gradient penalty from "Improved Training of Wasserstein GANs"
+        alpha = self.srng.uniform((self.batch_size, 1))
+        interpolates = alpha * real_data + ((1 - alpha) * fake_data)
+        interp_discr_out = self.get_discr_vals(interpolates,
+                                               training=True)
+        gradients = T.grad(interp_discr_out.sum(), interpolates)
+        slopes = T.sqrt((gradients**2).sum(axis=1))  # gradient norms
+        gradient_penalty = T.mean((slopes - 1)**2)
+        cost -= self.lmbda * gradient_penalty
         return cost
 
     def get_gen_cost(self, gen_data):

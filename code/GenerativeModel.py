@@ -310,6 +310,7 @@ class GBDS(GenerativeModel):
 
     def init_CGAN(self, nlayers_gen, nlayers_discr, state_dim, noise_dim,
                   hidden_dim, batch_size, nonlinearity=leaky_rectify,
+                  lmbda=10.0,
                   init_std_G=1.0, init_std_D=0.005,
                   condition_noise=None,
                   condition_scale=None, instance_noise=None):
@@ -323,6 +324,7 @@ class GBDS(GenerativeModel):
         """
         self.CGAN_J = CGAN(nlayers_gen, nlayers_discr, state_dim, noise_dim,
                            hidden_dim, self.JDim, batch_size, self.srng,
+                           lmbda=lmbda,
                            nonlinearity=nonlinearity,
                            init_std_G=init_std_G,
                            init_std_D=init_std_D,
@@ -331,7 +333,8 @@ class GBDS(GenerativeModel):
                            instance_noise=instance_noise)
 
     def init_GAN(self, nlayers_gen, nlayers_discr, noise_dim,
-                 hidden_dim, batch_size, nonlinearity=leaky_rectify,
+                 hidden_dim, batch_size, lmbda=10.0,
+                 nonlinearity=leaky_rectify,
                  init_std_G=1.0, init_std_D=0.005,
                  instance_noise=None):
         """
@@ -343,6 +346,7 @@ class GBDS(GenerativeModel):
         """
         self.GAN_g0 = WGAN(nlayers_gen, nlayers_discr, noise_dim,
                            hidden_dim, self.yDim, batch_size, self.srng,
+                           lmbda=lmbda,
                            nonlinearity=nonlinearity,
                            init_std_G=init_std_G,
                            init_std_D=init_std_D,
