@@ -352,37 +352,38 @@ class GBDS(GenerativeModel):
                            init_std_D=init_std_D,
                            instance_noise=instance_noise)
 
-    def get_preds(self, Y, training=False, post_g=None, postJ=None,
+    def get_preds(self, Y, training=False, post_g=None,
                   gen_g=None, extra_conds=None):
         """
         Return the predicted next J, g, U, and Y for each point in Y.
 
-        For training: provide postJ and post_g, samples from the posterior,
-                      which are used to calculate the ELBO
+        For training: provide post_g, sample from the posterior,
+                      which is used to calculate the ELBO
         For generating new data: provide gen_g, the generated goal states up to
                                  the current timepoint
         """
-        if training and (post_g is None or postJ is None):
+        if training and post_g is None:
             raise Exception(
-                "Must provide samples from posteriors during training")
+                "Must provide sample of g from posterior during training")
         # Draw next goals based on force
-        if postJ is not None and post_g is not None:
+        if post_g is not None:  # Calculate next goals from posterior
+            postJ = self.draw_postJ(post_g)
             J = None  # not generating J from CGAN, using sample from posterior
-            J_mean = postJ[:, :self.yDim]
-            J_scale = T.nnet.softplus(postJ[:, self.yDim:])
-            next_g = (post_g[:-1] + J_scale * J_mean) / (1 + J_scale)
-        elif gen_g is not None:
+            J_mu = postJ[:, :self.yDim]
+            J_lambda = T.nnet.softplus(postJ[:, self.yDim:])
+            next_g = (post_g[:-1] + J_lambda * J_mu) / (1 + J_lambda)
+        elif gen_g is not None:  # Generate next goals
             # get states from position
             states = self.get_states(Y)
             if extra_conds is not None:
                 states = T.horizontal_stack(states, extra_conds)
             # Get external force from CGAN
             J = self.CGAN_J.get_generated_data(states, training=training)
-            J_mean = J[:, :self.yDim]
-            J_scale = T.nnet.softplus(J[:, self.yDim:])
-            goal = ((gen_g[(-1,)] + J_scale[(-1,)] * J_mean[(-1,)]) /
-                    (1 + J_scale[(-1,)]))
-            var = self.sigma**2 / (1 + J_scale[(-1,)])
+            J_mu = J[:, :self.yDim]
+            J_lambda = T.nnet.softplus(J[:, self.yDim:])
+            goal = ((gen_g[(-1,)] + J_lambda[(-1,)] * J_mu[(-1,)]) /
+                    (1 + J_lambda[(-1,)]))
+            var = self.sigma**2 / (1 + J_lambda[(-1,)])
             goal += self.srng.normal(goal.shape) * T.sqrt(var)
             next_g = T.vertical_stack(gen_g[1:],
                                       goal)
@@ -390,9 +391,9 @@ class GBDS(GenerativeModel):
             raise Exception("Goal states must be provided " +
                             "(either posterior or generated)")
         # PID Controller for next control point
-        if post_g is not None:
+        if post_g is not None:  # calculate error from posterior goals
             error = post_g[1:] - Y[:, self.yCols]
-        else:
+        else:  # calculate error from generated goals
             error = next_g - Y[:, self.yCols]
 
         # Assume control starts at zero
@@ -414,12 +415,11 @@ class GBDS(GenerativeModel):
             Udiff = T.horizontal_stack(*Udiff)
         else:
             Udiff = Udiff[0]
-        if post_g is None:
+        if post_g is None:  # Add control signal noise to generated data
             Udiff += self.eps * self.srng.normal(Udiff.shape)
         Upred = Uprev + Udiff
         # get predicted Y
         Ypred = Y[:, self.yCols] + self.vel.reshape((1, self.yDim)) * T.tanh(Upred)
-        # Ypred = Y[:, self.yCols] + self.vel.reshape((1, self.yDim)) * Upred
 
         return J, next_g, Upred, Ypred
 
@@ -452,8 +452,8 @@ class GBDS(GenerativeModel):
         """
         # get current and next goal
         g_stack = T.horizontal_stack(g[:-1], g[1:])
-        self.postJ_mu = lasagne.layers.get_output(self.NN_postJ_mu,
-                                                  inputs=g_stack)
+        postJ_mu = lasagne.layers.get_output(self.NN_postJ_mu,
+                                             inputs=g_stack)
         batch_unc_sigma = lasagne.layers.get_output(self.NN_postJ_sigma,
                                                     inputs=g_stack).reshape(
                                                         (-1, self.JDim,
@@ -463,13 +463,14 @@ class GBDS(GenerativeModel):
             return (T.diag(T.nnet.softplus(T.diag(unc_sigma))) +
                     T.tril(unc_sigma, k=-1))
 
-        self.postJ_sigma, _ = theano.scan(fn=constrain_sigma,
-                                          outputs_info=None,
-                                          sequences=[batch_unc_sigma])
-        self.postJ = self.postJ_mu + T.batched_dot(self.postJ_sigma,
-                                                   self.srng.normal(
-                                                       (g_stack.shape[0],
-                                                        self.JDim)))
+        postJ_sigma, _ = theano.scan(fn=constrain_sigma,
+                                     outputs_info=None,
+                                     sequences=[batch_unc_sigma])
+        postJ = postJ_mu + T.batched_dot(postJ_sigma,
+                                         self.srng.normal(
+                                             (g_stack.shape[0],
+                                              self.JDim)))
+        return postJ
 
     def evaluateGANLoss(self, post_g0, mode='D'):
         """
@@ -515,8 +516,6 @@ class GBDS(GenerativeModel):
         g: Goal state time series (sample from the recognition model)
         Y: Time series of positions
         '''
-        # get q(J|g)
-        self.draw_postJ(g)
         # Calculate real control signal
         U_true = T.arctanh((Y[1:, self.yCols] - Y[:-1, self.yCols]) /
                            self.vel.reshape((1, self.yDim)))
@@ -525,8 +524,7 @@ class GBDS(GenerativeModel):
         # can't calculate the error
         Jpred, g_pred, Upred, Ypred = self.get_preds(Y[:-1],
                                                      training=True,
-                                                     post_g=g,
-                                                     postJ=self.postJ)
+                                                     post_g=g)
         # calculate loss on control signal
         resU = U_true - Upred
         LogDensity = -(resU**2 / (2 * self.eps**2)).sum()
