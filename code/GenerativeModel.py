@@ -423,29 +423,6 @@ class GBDS(GenerativeModel):
 
         return J, next_g, Upred, Ypred
 
-    def getNextState(self, curr_y, curr_g, extra_conds=None):
-        """
-        Generate predicted next data point based on given data.
-        Used for generating trials. We keep track of g externally because it
-        is dependent on the previous g.
-        """
-        if self.CGAN_J is None:
-            raise Exception("Must initiate and train CGAN before calling")
-        _, g_pred, _, Ypred = self.get_preds(curr_y, gen_g=curr_g,
-                                             extra_conds=extra_conds)
-        return g_pred[-1], Ypred[-1]
-
-    def fit_trial(self, g, Y_true):
-        '''
-        Return a theano expression that calculates a fit (next timestep
-        prediction) for the given data.
-        '''
-        self.draw_postJ(g)
-        _, _, _, Ypred = self.get_preds(Y_true[:-1], training=False,
-                                        post_g=g,
-                                        postJ=self.postJ)
-        return Ypred
-
     def draw_postJ(self, g):
         """
         Calculate posterior of J using current and next goal
