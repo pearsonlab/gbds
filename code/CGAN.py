@@ -21,6 +21,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 import lasagne
+from theano.tensor.shared_randomstreams import RandomStreams
 import theano.tensor as T
 from nn_utils import get_network
 from lasagne.nonlinearities import leaky_rectify
@@ -36,13 +37,16 @@ class CGAN(object):
     Gulrajani, Ishaan, et al. "Improved Training of Wasserstein GANs."
     arXiv preprint arXiv:1704.00028 (2017).
     """
-    def __init__(self, nlayers_G, nlayers_D, ndims_condition, ndims_noise,
-                 ndims_hidden, ndims_data, batch_size, srng,
-                 lmbda=10.0,
-                 nonlinearity=leaky_rectify, init_std_G=1.0,
-                 init_std_D=0.005,
-                 condition_noise=None, condition_scale=None,
+    def __init__(self, ndims_condition, ndims_noise, ndims_hidden, ndims_data,
+                 nlayers_G=3, nlayers_D=3, batch_size=4096, srng=None,
+                 lmbda=10.0, nonlinearity=leaky_rectify, init_std_G=1.0,
+                 init_std_D=0.005, condition_noise=None, condition_scale=None,
                  instance_noise=None):
+        # symbolic random number generator
+        if srng is None:
+            self.srng = RandomStreams(seed=234)
+        else:
+            self.srng = srng
         # Neural network (G) that generates data to match the real data
         self.gen_net = get_network(batch_size,
                                    ndims_condition + ndims_noise, ndims_data,
@@ -61,8 +65,6 @@ class CGAN(object):
         self.lmbda = lmbda
         # size of minibatches (number of rows)
         self.batch_size = batch_size
-        # symbolic random number generator
-        self.srng = srng
         # number of dimensions of conditional input
         self.ndims_condition = ndims_condition
         # number of dimensions of noise input
@@ -154,12 +156,15 @@ class WGAN(object):
     Gulrajani, Ishaan, et al. "Improved Training of Wasserstein GANs."
     arXiv preprint arXiv:1704.00028 (2017).
     """
-    def __init__(self, nlayers_G, nlayers_D, ndims_noise,
-                 ndims_hidden, ndims_data, batch_size, srng,
-                 lmbda=10.0,
-                 nonlinearity=leaky_rectify, init_std_G=1.0,
-                 init_std_D=0.005,
-                 instance_noise=None):
+    def __init__(self, ndims_noise, ndims_hidden, ndims_data,
+                 nlayers_G=3, nlayers_D=3, batch_size=4096, srng=None,
+                 lmbda=10.0, nonlinearity=leaky_rectify, init_std_G=1.0,
+                 init_std_D=0.005, instance_noise=None):
+        # symbolic random number generator
+        if srng is None:
+            self.srng = RandomStreams(seed=234)
+        else:
+            self.srng = srng
         # Neural network (G) that generates data to match the real data
         self.gen_net = get_network(batch_size,
                                    ndims_noise, ndims_data,
@@ -178,8 +183,6 @@ class WGAN(object):
         self.lmbda = lmbda
         # size of minibatches (number of rows)
         self.batch_size = batch_size
-        # symbolic random number generator
-        self.srng = srng
         # number of dimensions of noise input
         self.ndims_noise = ndims_noise
         # number of hidden units

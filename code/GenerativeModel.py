@@ -308,49 +308,32 @@ class GBDS(GenerativeModel):
                                      broadcastable=[True, False])
         self.eps = T.nnet.softplus(self.unc_eps)
 
-    def init_CGAN(self, nlayers_gen, nlayers_discr, state_dim, noise_dim,
-                  hidden_dim, batch_size, nonlinearity=leaky_rectify,
-                  lmbda=10.0,
-                  init_std_G=1.0, init_std_D=0.005,
-                  condition_noise=None,
-                  condition_scale=None, instance_noise=None):
+    def init_CGAN(self, *args, **kwargs):
         """
         Initialize Conditional Generative Adversarial Network that generates
         Gaussian mixture components, J (mu and sigma), from states and random
         noise
 
+        Look at CGAN.py for initialization parameters.
+
         This function exists so that a control model can be trained, and
         then, several cGANs can be trained using that control model.
         """
-        self.CGAN_J = CGAN(nlayers_gen, nlayers_discr, state_dim, noise_dim,
-                           hidden_dim, self.JDim, batch_size, self.srng,
-                           lmbda=lmbda,
-                           nonlinearity=nonlinearity,
-                           init_std_G=init_std_G,
-                           init_std_D=init_std_D,
-                           condition_noise=condition_noise,
-                           condition_scale=condition_scale,
-                           instance_noise=instance_noise)
+        kwargs['srng'] = self.srng
+        self.CGAN_J = CGAN(*args, **kwargs)
 
-    def init_GAN(self, nlayers_gen, nlayers_discr, noise_dim,
-                 hidden_dim, batch_size, lmbda=10.0,
-                 nonlinearity=leaky_rectify,
-                 init_std_G=1.0, init_std_D=0.005,
-                 instance_noise=None):
+    def init_GAN(self, *args, **kwargs):
         """
         Initialize Generative Adversarial Network that generates
         initial goal state, g_0, from random noise
 
+        Look at CGAN.py for initialization parameters.
+
         This function exists so that a control model can be trained, and
         then, several GANs can be trained using that control model.
         """
-        self.GAN_g0 = WGAN(nlayers_gen, nlayers_discr, noise_dim,
-                           hidden_dim, self.yDim, batch_size, self.srng,
-                           lmbda=lmbda,
-                           nonlinearity=nonlinearity,
-                           init_std_G=init_std_G,
-                           init_std_D=init_std_D,
-                           instance_noise=instance_noise)
+        kwargs['srng'] = self.srng
+        self.GAN_g0 = WGAN(*args, **kwargs)
 
     def get_preds(self, Y, training=False, post_g=None,
                   gen_g=None, extra_conds=None):
