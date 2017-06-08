@@ -194,8 +194,8 @@ class WGAN(object):
         """
         Return N generated samples from G.
         """
-        noise = 2 * self.srng.uniform((N, self.ndims_noise)) - 1
-        # noise = self.srng.normal((N, self.ndims_noise))
+        # noise = 2 * self.srng.uniform((N, self.ndims_noise)) - 1
+        noise = self.srng.normal((N, self.ndims_noise))
         gen_data = lasagne.layers.get_output(self.gen_net, inputs=noise,
                                              deterministic=(not training))
         return gen_data
