@@ -29,7 +29,7 @@ def get_network(batch_size, input_dim, output_dim, hidden_dim, num_layers,
                 PKLparams=None, srng=None, batchnorm=False, is_shooter=False,
                 row_sparse=False, add_pklayers=False, filt_size=None,
                 hidden_nonlin=rectify, output_nonlin=linear,
-                init_std=1.0):
+                init_std=1.0, add_bias=True):
     """
     Returns a NN with the specified parameters.
     Also returns a list of PKBias layers
@@ -63,13 +63,27 @@ def get_network(batch_size, input_dim, output_dim, hidden_dim, num_layers,
             layer_nonlin = hidden_nonlin
 
         if batchnorm and i < num_layers - 1 and i != 0:
-            NN = lasagne.layers.batch_norm(lasagne.layers.DenseLayer(
+            if add_bias == False:
+                NN = lasagne.layers.batch_norm(lasagne.layers.DenseLayer(
+                NN,
+                layer_dim,
+                nonlinearity=layer_nonlin,
+                W=lasagne.init.Normal(std=init_std), b=None))
+            else:
+                NN = lasagne.layers.batch_norm(lasagne.layers.DenseLayer(
                 NN,
                 layer_dim,
                 nonlinearity=layer_nonlin,
                 W=lasagne.init.Normal(std=init_std)))
         else:
-            NN = lasagne.layers.DenseLayer(
+            if add_bias == False:
+                NN = lasagne.layers.DenseLayer(
+                NN,
+                layer_dim,
+                nonlinearity=layer_nonlin,
+                W=lasagne.init.Normal(std=init_std),b=None)
+            else:
+                NN = lasagne.layers.DenseLayer(
                 NN,
                 layer_dim,
                 nonlinearity=layer_nonlin,

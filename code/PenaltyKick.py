@@ -60,25 +60,27 @@ class SGVB_GBDS():#(Trainable):
            - Titsias and Lazaro-Gredilla (ICML, 2014)
     '''
     def __init__(self, gen_params_ball, gen_params_goalie, yCols_ball,
-                 yCols_goalie, rec_params, ntrials):
+                 yCols_goalie, rec_params, ntrials, UCols_goalieJS, UCols_ballJS):
         # instantiate rng's
         self.srng = RandomStreams(seed=234)
         self.nrng = np.random.RandomState(124)
 
         # actual model parameters
         # symbolic variables for VB training
-        self.X, self.Y = T.matrices('X', 'Y')
+        self.X, self.Y, self.U = T.matrices('X', 'Y','U')
         # symbolic variables for CGAN training
-        self.J, self.s = T.matrices('J', 's')
+        self.J, self.s, self.sub = T.matrices('J', 's', 'sub')
         # symbolic variables for GAN training
-        self.g0 = T.matrix('g0')
+        self.g0, self.g0_conds = T.matrices('g0', 'g0_conds')
 
         self.yCols_goalie = yCols_goalie
         self.yCols_ball = yCols_ball
         self.yDim_goalie = len(self.yCols_goalie)
         self.yDim_ball = len(self.yCols_ball)
-        self.yDim = self.yDim_goalie + self.yDim_ball
+        self.yDim = self.Y.shape[1]
         self.xDim = self.yDim
+        self.UCols_goalieJS = UCols_goalieJS
+        self.UCols_ballJS = UCols_ballJS
 
         # instantiate our prior and recognition models
         self.mrec = SmoothingPastLDSTimeSeries(rec_params, self.Y, self.xDim,
@@ -181,31 +183,33 @@ class SGVB_GBDS():#(Trainable):
         cost = 0
         if self.isTrainingGenerativeModel or self.isTrainingRecognitionModel:
             cost += self.mprior_goalie.evaluateLogDensity(
-                q[:, self.yCols_goalie], self.Y)
+                q[:, self.yCols_goalie], self.Y, self.U[:, self.UCols_goalieJS])
             cost += self.mprior_ball.evaluateLogDensity(
-                q[:, self.yCols_ball], self.Y)
+                q[:, self.yCols_ball], self.Y, self.U[:, self.UCols_ballJS])
         if self.isTrainingRecognitionModel:
             cost += self.mrec.evalEntropy()
         if self.isTrainingCGANGenerator:
             cost += self.mprior_ball.evaluateCGANLoss(self.J[:, JCols_ball],
-                                                      self.s, mode='G')
+                                                      self.s, self.sub, mode='G')
             cost += self.mprior_goalie.evaluateCGANLoss(
-                self.J[:, JCols_goalie], self.s, mode='G')
+                self.J[:, JCols_goalie], self.s, self.sub, mode='G')
         if self.isTrainingCGANDiscriminator:
             cost += self.mprior_ball.evaluateCGANLoss(self.J[:, JCols_ball],
-                                                      self.s, mode='D')
+                                                      self.s, self.sub, mode='D')
             cost += self.mprior_goalie.evaluateCGANLoss(
-                self.J[:, JCols_goalie], self.s, mode='D')
+                self.J[:, JCols_goalie], self.s, self.sub, mode='D')
         if self.isTrainingGANGenerator:
             cost += self.mprior_ball.evaluateGANLoss(self.g0[:, self.yCols_ball],
+                                                     g0_conds=self.g0_conds,
                                                      mode='G')
             cost += self.mprior_goalie.evaluateGANLoss(
-                self.g0[:, self.yCols_goalie], mode='G')
+                self.g0[:, self.yCols_goalie], g0_conds=self.g0_conds, mode='G')
         if self.isTrainingGANDiscriminator:
             cost += self.mprior_ball.evaluateGANLoss(self.g0[:, self.yCols_ball],
+                                                     g0_conds=self.g0_conds,
                                                      mode='D')
             cost += self.mprior_goalie.evaluateGANLoss(
-                self.g0[:, self.yCols_goalie], mode='D')
+                self.g0[:, self.yCols_goalie], g0_conds=self.g0_conds, mode='D')
         if self.isTrainingGenerativeModel or self.isTrainingRecognitionModel:
             return cost / self.Y.shape[0]
         else:  # training GAN

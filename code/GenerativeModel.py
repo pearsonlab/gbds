@@ -265,23 +265,23 @@ class GBDS(GenerativeModel):
 
         # coefficients for PID controller (one for each dimension)
         # https://en.wikipedia.org/wiki/PID_controller#Discrete_implementation
-        unc_Kp = theano.shared(value=np.zeros((self.yDim, 1),
-                                              dtype=theano.config.floatX),
+        unc_Kp = theano.shared(value=7*np.ones((self.yDim, 1),
+                                               dtype=theano.config.floatX),
                                name='unc_Kp', borrow=True)
         unc_Ki = theano.shared(value=np.zeros((self.yDim, 1),
-                                              dtype=theano.config.floatX),
+                                               dtype=theano.config.floatX),
                                name='unc_Ki', borrow=True)
         unc_Kd = theano.shared(value=np.zeros((self.yDim, 1),
-                                              dtype=theano.config.floatX),
+                                               dtype=theano.config.floatX),
                                name='unc_Kd', borrow=True)
 
         # create list of PID controller parameters for easy access in getParams
-        self.PID_params = [unc_Kp, unc_Ki, unc_Kd]
+        self.PID_params = [unc_Kp]  # [unc_Kp, unc_Ki, unc_Kd]
 
         # constrain PID controller parameters to be positive
         self.Kp = T.nnet.softplus(unc_Kp)
-        self.Ki = T.nnet.softplus(unc_Ki)
-        self.Kd = T.nnet.softplus(unc_Kd)
+        self.Ki = T.nnet.relu(unc_Ki)  # T.nnet.softplus(unc_Ki)
+        self.Kd = T.nnet.relu(unc_Kd)  # T.nnet.softplus(unc_Kd)
 
         # calculate coefficients to be placed in convolutional filter
         t_coeff = self.Kp + self.Ki + self.Kd
@@ -299,17 +299,17 @@ class GBDS(GenerativeModel):
         self.sigma = T.nnet.softplus(self.unc_sigma)
 
         # noise coefficient on control signals
-        self.unc_eps = theano.shared(value=np.zeros((1, self.yDim),
+        self.unc_eps = theano.shared(value=-9 * np.ones((1, self.yDim),
                                      dtype=theano.config.floatX),
                                      name='unc_eps', borrow=True,
                                      broadcastable=[True, False])
         self.eps = T.nnet.softplus(self.unc_eps)
 
-    def init_CGAN(self, nlayers_gen, nlayers_discr, state_dim, noise_dim,
+    def init_CGAN(self, nlayers_gen, nlayers_discr, nlayers_compress, state_dim, subID_dim, compress_dim, noise_dim,
                   hidden_dim, batch_size, nonlinearity=leaky_rectify,
                   init_std_G=1.0, init_std_D=0.005,
                   condition_noise=None,
-                  condition_scale=None, instance_noise=None):
+                  condition_scale=None, instance_noise=None,gamma=None):
         """
         Initialize Conditional Generative Adversarial Network that generates
         Gaussian mixture components, J (mu and sigma), from states and random
@@ -318,37 +318,48 @@ class GBDS(GenerativeModel):
         This function exists so that a control model can be trained, and
         then, several cGANs can be trained using that control model.
         """
-        self.CGAN_J = CGAN(nlayers_gen, nlayers_discr, state_dim, noise_dim,
-                           hidden_dim, self.JDim, batch_size, self.srng,
+        self.CGAN_J = CGAN(nlayers_gen, nlayers_discr, state_dim, noise_dim, hidden_dim,
+                           self.JDim, batch_size, self.srng, nlayers_compress, subID_dim, compress_dim,
                            nonlinearity=nonlinearity,
                            init_std_G=init_std_G,
                            init_std_D=init_std_D,
                            condition_noise=condition_noise,
                            condition_scale=condition_scale,
-                           instance_noise=instance_noise)
+                           instance_noise=instance_noise,gamma=None)
 
     def init_GAN(self, nlayers_gen, nlayers_discr, noise_dim,
                  hidden_dim, batch_size, nonlinearity=leaky_rectify,
                  init_std_G=1.0, init_std_D=0.005,
-                 instance_noise=None):
+                 instance_noise=None, cond_dim=0):
         """
         Initialize Generative Adversarial Network that generates
-        initial goal state, g_0, from random noise
+        initial goal state, g_0, from random noise (and, optionally,
+        conditions such as subject ID)
 
         This function exists so that a control model can be trained, and
         then, several GANs can be trained using that control model.
         """
-        self.GAN_g0 = WGAN(nlayers_gen, nlayers_discr, noise_dim,
-                           hidden_dim, self.yDim, batch_size, self.srng,
-                           nonlinearity=nonlinearity,
-                           init_std_G=init_std_G,
-                           init_std_D=init_std_D,
-                           instance_noise=instance_noise)
+        if cond_dim > 0:
+            self.GAN_g0 = CGAN(nlayers_gen, nlayers_discr, cond_dim, noise_dim,
+                               hidden_dim, self.yDim, batch_size, self.srng, 
+                               nonlinearity=nonlinearity,
+                               init_std_G=init_std_G,
+                               init_std_D=init_std_D,
+                               instance_noise=instance_noise)
+            self.g0_extra_conds = True
+        else:
+            self.GAN_g0 = WGAN(nlayers_gen, nlayers_discr, noise_dim,
+                               hidden_dim, self.yDim, batch_size, self.srng,
+                               nonlinearity=nonlinearity,
+                               init_std_G=init_std_G,
+                               init_std_D=init_std_D,
+                               instance_noise=instance_noise)
+            self.g0_extra_conds = False
 
-    def get_preds(self, Y, training=False, post_g=None, postJ=None,
+    def get_preds(self, Y, U, subIDconds, training=False, post_g=None, postJ=None,
                   gen_g=None, extra_conds=None):
         """
-        Return the predicted next J, g, U, and Y for each point in Y.
+        Return the predicted next J, g, and U for each point in Y. (Plus U at t=0)
 
         For training: provide postJ and post_g, samples from the posterior,
                       which are used to calculate the ELBO
@@ -368,9 +379,9 @@ class GBDS(GenerativeModel):
             # get states from position
             states = self.get_states(Y)
             if extra_conds is not None:
-                states = T.horizontal_stack(states, extra_conds)
+                states = T.horizontal_stack(states, extra_conds.astype(theano.config.floatX))
             # Get external force from CGAN
-            J = self.CGAN_J.get_generated_data(states, training=training)
+            J = self.CGAN_J.get_generated_data(states, subIDconds, training=training)
             J_mean = J[:, :self.yDim]
             J_scale = T.nnet.softplus(J[:, self.yDim:])
             goal = ((gen_g[(-1,)] + J_scale[(-1,)] * J_mean[(-1,)]) /
@@ -384,25 +395,19 @@ class GBDS(GenerativeModel):
                             "(either posterior or generated)")
         # PID Controller for next control point
         if post_g is not None:
-            error = post_g[1:] - Y[:, self.yCols]
+            error = post_g - T.vertical_stack(Y[[[0]], self.yCols], Y[:, self.yCols])
         else:
             error = next_g - Y[:, self.yCols]
 
-        # Assume control starts at zero
-        Uprev = T.vertical_stack(T.zeros((1, self.yDim)),
-                                 T.arctanh((Y[1:, self.yCols] -
-                                           Y[:-1, self.yCols]) /
-                                 self.vel.reshape((1, self.yDim))))
         Udiff = []
         for i in range(self.yDim):
             # get current error signal and corresponding filter
             signal = error[:, i]
-            filt = self.L[i]
+            filt = self.L[i].reshape((1, 1, -1, 1))
             # zero pad beginning
-            signal = T.concatenate((T.zeros(2), signal))
-            signal = signal.reshape((-1, 1))
-            filt = filt.reshape((-1, 1))
-            res = conv.conv2d(signal, filt, border_mode='valid')
+            signal = T.concatenate((T.zeros(2), signal)).reshape((1, 1, -1, 1))
+            res = T.nnet.conv2d(signal, filt, border_mode='valid')
+            res = res.reshape((-1, 1))
             Udiff.append(res)
         if len(Udiff) > 1:
             Udiff = T.horizontal_stack(*Udiff)
@@ -410,14 +415,13 @@ class GBDS(GenerativeModel):
             Udiff = Udiff[0]
         if post_g is None:
             Udiff += self.eps * self.srng.normal(Udiff.shape)
-        Upred = Uprev + Udiff
-        # get predicted Y
-        Ypred = Y[:, self.yCols] + self.vel.reshape((1, self.yDim)) * T.tanh(Upred)
-        # Ypred = Y[:, self.yCols] + self.vel.reshape((1, self.yDim)) * Upred
+            Upred = U + Udiff
+        else:
+            Upred = T.vertical_stack(T.zeros((1, self.yDim)), U) + Udiff
 
-        return J, next_g, Upred, Ypred
+        return J, next_g, Upred
 
-    def getNextState(self, curr_y, curr_g, extra_conds=None):
+    def getNextState(self, curr_y, curr_u, curr_g, extra_conds=None):
         """
         Generate predicted next data point based on given data.
         Used for generating trials. We keep track of g externally because it
@@ -425,20 +429,22 @@ class GBDS(GenerativeModel):
         """
         if self.CGAN_J is None:
             raise Exception("Must initiate and train CGAN before calling")
-        _, g_pred, _, Ypred = self.get_preds(curr_y, gen_g=curr_g,
+        _, g_pred, Upred = self.get_preds(curr_y, curr_u, gen_g=curr_g,
                                              extra_conds=extra_conds)
-        return g_pred[-1], Ypred[-1]
+        return g_pred[-1], Upred[-1]
 
-    def fit_trial(self, g, Y_true):
+    def fit_trial(self, g, Y_true, U_true):
         '''
         Return a theano expression that calculates a fit (next timestep
         prediction) for the given data.
         '''
         self.draw_postJ(g)
-        _, _, _, Ypred = self.get_preds(Y_true[:-1], training=False,
-                                        post_g=g,
-                                        postJ=self.postJ)
-        return Ypred
+        _, _, Upred = self.get_preds(Y_true[:-1],
+                                     U_true[:-1],
+                                     training=False,
+                                     post_g=g,
+                                     postJ=self.postJ)
+        return Upred
 
     def draw_postJ(self, g):
         """
@@ -465,25 +471,37 @@ class GBDS(GenerativeModel):
                                                        (g_stack.shape[0],
                                                         self.JDim)))
 
-    def evaluateGANLoss(self, post_g0, mode='D'):
+    def evaluateGANLoss(self, post_g0, g0_conds=None, mode='D'):
         """
         Evaluate loss of GAN
         Mode is D for discriminator, G for generator
         """
         if self.GAN_g0 is None:
             raise Exception("Must initiate GAN before calling")
-        # Get external force from CGAN
-        gen_g0 = self.GAN_g0.get_generated_data(post_g0.shape[0],
-                                                training=True)
-        if mode == 'D':
-            return self.GAN_g0.get_discr_cost(post_g0, gen_g0)
-        elif mode == 'G':
-            return self.GAN_g0.get_gen_cost(gen_g0)
+        if self.g0_extra_conds:
+            # Get external force from CGAN
+            gen_g0 = self.GAN_g0.get_generated_data(g0_conds,
+                                                    training=True)
+            if mode == 'D':
+                return self.GAN_g0.get_discr_cost(post_g0, gen_g0, g0_conds)
+            elif mode == 'G':
+                return self.GAN_g0.get_gen_cost(gen_g0, g0_conds)
+            else:
+                raise Exception("Invalid mode. Provide 'G' for generator loss " +
+                                "or 'D' for discriminator loss.")
         else:
-            raise Exception("Invalid mode. Provide 'G' for generator loss " +
-                            "or 'D' for discriminator loss.")
+            # Get external force from CGAN
+            gen_g0 = self.GAN_g0.get_generated_data(post_g0.shape[0],
+                                                    training=True)
+            if mode == 'D':
+                return self.GAN_g0.get_discr_cost(post_g0, gen_g0)
+            elif mode == 'G':
+                return self.GAN_g0.get_gen_cost(gen_g0)
+            else:
+                raise Exception("Invalid mode. Provide 'G' for generator loss " +
+                                "or 'D' for discriminator loss.")
 
-    def evaluateCGANLoss(self, postJ, states, mode='D'):
+    def evaluateCGANLoss(self, postJ, states, subID, mode='D'):
         """
         Evaluate loss of cGAN
         Mode is D for discriminator, G for generator
@@ -491,17 +509,17 @@ class GBDS(GenerativeModel):
         if self.CGAN_J is None:
             raise Exception("Must initiate cGAN before calling")
         # Get external force from CGAN
-        genJ = self.CGAN_J.get_generated_data(states, training=True)
+        genJ = self.CGAN_J.get_generated_data(states, subID, training=True)
         if mode == 'D':
             return self.CGAN_J.get_discr_cost(postJ, genJ,
-                                              states)
+                                              states, subID)
         elif mode == 'G':
-            return self.CGAN_J.get_gen_cost(genJ, states)
+            return self.CGAN_J.get_gen_cost(genJ, states, subID)
         else:
             raise Exception("Invalid mode. Provide 'G' for generator loss " +
                             "or 'D' for discriminator loss.")
 
-    def evaluateLogDensity(self, g, Y):
+    def evaluateLogDensity(self, g, Y, U):
         '''
         Return a theano function that evaluates the log-density of the
         GenerativeModel.
@@ -512,17 +530,19 @@ class GBDS(GenerativeModel):
         # get q(J|g)
         self.draw_postJ(g)
         # Calculate real control signal
-        U_true = T.arctanh((Y[1:, self.yCols] - Y[:-1, self.yCols]) /
-                           self.vel.reshape((1, self.yDim)))
+        #U_true = T.arctanh((Y[1:, self.yCols] - Y[:-1, self.yCols]) /
+        #                   self.vel.reshape((1, self.yDim)))
+
         # Get predictions for next timestep (at each timestep except for last)
         # disregard last timestep bc we don't know the next value, thus, we
         # can't calculate the error
-        Jpred, g_pred, Upred, Ypred = self.get_preds(Y[:-1],
-                                                     training=True,
-                                                     post_g=g,
-                                                     postJ=self.postJ)
+        Jpred, g_pred, Upred = self.get_preds(Y[:-1],
+                                              U[:-1],
+                                              training=True,
+                                              post_g=g,
+                                              postJ=self.postJ)
         # calculate loss on control signal
-        resU = U_true - Upred
+        resU = U - Upred
         LogDensity = -(resU**2 / (2 * self.eps**2)).sum()
         LogDensity -= 0.5 * T.log(2 * np.pi) + T.log(self.eps).sum()
 
