@@ -306,10 +306,10 @@ class GBDS(GenerativeModel):
         self.eps = T.nnet.softplus(self.unc_eps)
 
     def init_CGAN(self, nlayers_gen, nlayers_discr, nlayers_compress, state_dim, subID_dim, compress_dim, noise_dim,
-                  hidden_dim, batch_size, nonlinearity=leaky_rectify,
+                  hidden_dim, batch_size, compressbool=False,nonlinearity=leaky_rectify,
                   init_std_G=1.0, init_std_D=0.005,
                   condition_noise=None,
-                  condition_scale=None, instance_noise=None,gamma=None):
+                  condition_scale=None, instance_noise=None,gamma=None, improveWGAN=False, lmbda=10):
         """
         Initialize Conditional Generative Adversarial Network that generates
         Gaussian mixture components, J (mu and sigma), from states and random
@@ -319,13 +319,13 @@ class GBDS(GenerativeModel):
         then, several cGANs can be trained using that control model.
         """
         self.CGAN_J = CGAN(nlayers_gen, nlayers_discr, state_dim, noise_dim, hidden_dim,
-                           self.JDim, batch_size, self.srng, nlayers_compress, subID_dim, compress_dim,
+                           self.JDim, batch_size, self.srng, compressbool,nlayers_compress, subID_dim, compress_dim,
                            nonlinearity=nonlinearity,
                            init_std_G=init_std_G,
                            init_std_D=init_std_D,
                            condition_noise=condition_noise,
                            condition_scale=condition_scale,
-                           instance_noise=instance_noise,gamma=None)
+                           instance_noise=instance_noise,gamma=gamma, improveWGAN=improveWGAN, lmbda=lmbda)
 
     def init_GAN(self, nlayers_gen, nlayers_discr, noise_dim,
                  hidden_dim, batch_size, nonlinearity=leaky_rectify,
@@ -509,7 +509,12 @@ class GBDS(GenerativeModel):
         if self.CGAN_J is None:
             raise Exception("Must initiate cGAN before calling")
         # Get external force from CGAN
-        genJ = self.CGAN_J.get_generated_data(states, subID, training=True)
+        #import pdb; pdb.set_trace()
+        # if self.CGAN_J.compressbool is False:
+        # 	genJ = self.CGAN_J.get_generated_data(states, compress=False,subIDconds=subID, training=True)
+        # else:
+        genJ = self.CGAN_J.get_generated_data(states, subIDconds=subID, training=True)
+
         if mode == 'D':
             return self.CGAN_J.get_discr_cost(postJ, genJ,
                                               states, subID)
