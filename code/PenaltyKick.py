@@ -190,14 +190,14 @@ class SGVB_GBDS():#(Trainable):
             cost += self.mrec.evalEntropy()
         if self.isTrainingCGANGenerator:
             cost += self.mprior_ball.evaluateCGANLoss(self.J[:, JCols_ball],
-                                                      self.s, self.sub, mode='G')
+                                                      self.s, mode='G')
             cost += self.mprior_goalie.evaluateCGANLoss(
-                self.J[:, JCols_goalie], self.s, self.sub, mode='G')
+                self.J[:, JCols_goalie], self.s, mode='G')
         if self.isTrainingCGANDiscriminator:
             cost += self.mprior_ball.evaluateCGANLoss(self.J[:, JCols_ball],
-                                                      self.s, self.sub, mode='D')
+                                                      self.s, mode='D')
             cost += self.mprior_goalie.evaluateCGANLoss(
-                self.J[:, JCols_goalie], self.s, self.sub, mode='D')
+                self.J[:, JCols_goalie], self.s, mode='D')
         if self.isTrainingGANGenerator:
             cost += self.mprior_ball.evaluateGANLoss(self.g0[:, self.yCols_ball],
                                                      g0_conds=self.g0_conds,

@@ -305,11 +305,11 @@ class GBDS(GenerativeModel):
                                      broadcastable=[True, False])
         self.eps = T.nnet.softplus(self.unc_eps)
 
-    def init_CGAN(self, nlayers_gen, nlayers_discr, nlayers_compress, state_dim, subID_dim, compress_dim, noise_dim,
-                  hidden_dim, batch_size, compressbool=False,nonlinearity=leaky_rectify,
+    def init_CGAN(self, nlayers_gen, nlayers_discr, state_dim, noise_dim,
+                  hidden_dim, batch_size, nonlinearity=leaky_rectify,
                   init_std_G=1.0, init_std_D=0.005,
                   condition_noise=None,
-                  condition_scale=None, instance_noise=None,gamma=None, improveWGAN=False, lmbda=10):
+                  condition_scale=None, instance_noise=None):
         """
         Initialize Conditional Generative Adversarial Network that generates
         Gaussian mixture components, J (mu and sigma), from states and random
@@ -319,13 +319,13 @@ class GBDS(GenerativeModel):
         then, several cGANs can be trained using that control model.
         """
         self.CGAN_J = CGAN(nlayers_gen, nlayers_discr, state_dim, noise_dim, hidden_dim,
-                           self.JDim, batch_size, self.srng, compressbool,nlayers_compress, subID_dim, compress_dim,
+                           self.JDim, batch_size, self.srng,
                            nonlinearity=nonlinearity,
                            init_std_G=init_std_G,
                            init_std_D=init_std_D,
                            condition_noise=condition_noise,
                            condition_scale=condition_scale,
-                           instance_noise=instance_noise,gamma=gamma, improveWGAN=improveWGAN, lmbda=lmbda)
+                           instance_noise=instance_noise)
 
     def init_GAN(self, nlayers_gen, nlayers_discr, noise_dim,
                  hidden_dim, batch_size, nonlinearity=leaky_rectify,
@@ -501,7 +501,7 @@ class GBDS(GenerativeModel):
                 raise Exception("Invalid mode. Provide 'G' for generator loss " +
                                 "or 'D' for discriminator loss.")
 
-    def evaluateCGANLoss(self, postJ, states, subID, mode='D'):
+    def evaluateCGANLoss(self, postJ, states, mode='D'):
         """
         Evaluate loss of cGAN
         Mode is D for discriminator, G for generator
@@ -513,13 +513,13 @@ class GBDS(GenerativeModel):
         # if self.CGAN_J.compressbool is False:
         # 	genJ = self.CGAN_J.get_generated_data(states, compress=False,subIDconds=subID, training=True)
         # else:
-        genJ = self.CGAN_J.get_generated_data(states, subIDconds=subID, training=True)
+        genJ = self.CGAN_J.get_generated_data(states, training=True)
 
         if mode == 'D':
             return self.CGAN_J.get_discr_cost(postJ, genJ,
-                                              states, subID)
+                                              states)
         elif mode == 'G':
-            return self.CGAN_J.get_gen_cost(genJ, states, subID)
+            return self.CGAN_J.get_gen_cost(genJ, states)
         else:
             raise Exception("Invalid mode. Provide 'G' for generator loss " +
                             "or 'D' for discriminator loss.")
