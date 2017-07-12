@@ -127,7 +127,7 @@ class CGAN(object):
         # elif subIDconds:
         #     conditions = T.horizontal_stack(conditions, subIDconds)
         # else: #if gang0
-        conditions = conditions
+        #conditions = conditions
         ######
 
         noise = 2 * self.srng.uniform((conditions.shape[0],

@@ -356,7 +356,7 @@ class GBDS(GenerativeModel):
                                instance_noise=instance_noise)
             self.g0_extra_conds = False
 
-    def get_preds(self, Y, U, subIDconds, training=False, post_g=None, postJ=None,
+    def get_preds(self, Y, U, training=False, post_g=None, postJ=None,
                   gen_g=None, extra_conds=None):
         """
         Return the predicted next J, g, and U for each point in Y. (Plus U at t=0)
@@ -381,7 +381,8 @@ class GBDS(GenerativeModel):
             if extra_conds is not None:
                 states = T.horizontal_stack(states, extra_conds.astype(theano.config.floatX))
             # Get external force from CGAN
-            J = self.CGAN_J.get_generated_data(states, subIDconds, training=training)
+            #J = self.CGAN_J.get_generated_data(states, subIDconds, training=training)
+            J = self.CGAN_J.get_generated_data(states, training=training)
             J_mean = J[:, :self.yDim]
             J_scale = T.nnet.softplus(J[:, self.yDim:])
             goal = ((gen_g[(-1,)] + J_scale[(-1,)] * J_mean[(-1,)]) /
