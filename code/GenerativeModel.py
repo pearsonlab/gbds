@@ -240,11 +240,10 @@ class GBDS(GenerativeModel):
                 self.GMM_net, axis=1,
                 indices=slice(yDim * self.GMM_k, 2 * yDim * self.GMM_k)),
             nonlinearity=lasagne.nonlinearities.softplus)
-        self.GMM_w = lasagne.layers.NonlinearityLayer(
-            lasagne.layers.SliceLayer(
-                self.GMM_net, axis=1,
-                indices=slice(2 * yDim * self.GMM_k, None)),
-            nonlinearity=lasagne.nonlinearities.softmax)
+        self.GMM_w_vals = theano.shared(value=np.ones((self.GMM_k),
+                                        dtype=theano.config.floatX),
+                                        name='GMM_w_vals', borrow=True)
+        self.GMM_w = T.nnet.softmax(self.GMM_w_vals)
 
         # penalty on epsilon (noise on control signal)
         if 'pen_eps' in GenerativeParams:
@@ -330,14 +329,13 @@ class GBDS(GenerativeModel):
             (-1, self.GMM_k, self.yDim))
         lmbda = lasagne.layers.get_output(self.GMM_lambda, inputs=states).reshape(
             (-1, self.GMM_k, self.yDim))
-        all_w = lasagne.layers.get_output(self.GMM_w, inputs=states)
-        def select_components(sub_mu, sub_lmbda, w):
-            component = self.srng.choice(size=[1], a=T.arange(self.GMM_k), p=w.flatten())  # weighted sample of index
+        def select_components(sub_mu, sub_lmbda):
+            component = self.srng.choice(size=[1], a=T.arange(self.GMM_k), p=self.GMM_w.flatten())  # weighted sample of index
             return sub_mu[component[0], :], sub_lmbda[component[0], :]
         (mu_k, lmbda_k), _ = theano.scan(fn=select_components,
                                          outputs_info=None,
-                                         sequences=[mu, lmbda, all_w])
-        return mu, lmbda, all_w, mu_k, lmbda_k
+                                         sequences=[mu, lmbda])
+        return mu, lmbda, mu_k, lmbda_k
 
     def get_preds(self, Y, training=False, post_g=None,
                   gen_g=None, extra_conds=None):
@@ -356,7 +354,7 @@ class GBDS(GenerativeModel):
         states = self.get_states(Y, max_vel=self.all_vel)
         if extra_conds is not None:
             states = T.horizontal_stack(states, extra_conds)
-        all_mu, all_lmbda, w, mu_k, lmbda_k = self.sample_GMM(states)
+        all_mu, all_lmbda, mu_k, lmbda_k = self.sample_GMM(states)
         # Draw next goals based on force
         if post_g is not None:  # Calculate next goals from posterior
             next_g = ((post_g[:-1].reshape((-1, 1, self.yDim)) + all_mu * all_lmbda) / (1 + all_lmbda))
@@ -402,7 +400,7 @@ class GBDS(GenerativeModel):
         # get predicted Y
         Ypred = Y[:, self.yCols] + self.vel.reshape((1, self.yDim)) * T.tanh(Upred)
 
-        return all_mu, all_lmbda, w, next_g, Upred, Ypred
+        return all_mu, all_lmbda, next_g, Upred, Ypred
 
     def evaluateLogDensity(self, g, Y):
         '''
@@ -418,7 +416,7 @@ class GBDS(GenerativeModel):
         # Get predictions for next timestep (at each timestep except for last)
         # disregard last timestep bc we don't know the next value, thus, we
         # can't calculate the error
-        all_mu, all_lmbda, w, g_pred, Upred, Ypred = self.get_preds(Y[:-1],
+        all_mu, all_lmbda, g_pred, Upred, Ypred = self.get_preds(Y[:-1],
                                                      training=True,
                                                      post_g=g)
         # calculate loss on control signal
@@ -427,12 +425,12 @@ class GBDS(GenerativeModel):
         LogDensity -= 0.5 * T.log(2 * np.pi) + T.log(self.eps).sum()
         
         # calculate GMM loss
-        w_brdcst = w.reshape((-1, self.GMM_k, 1))
+        w_brdcst = self.GMM_w.reshape((1, self.GMM_k, 1))
         gmm_res_g = g[1:].reshape((-1, 1, self.yDim)) - g_pred
-        gmm_term = T.log(w_brdcst + 1e-8) - ((1 + all_lmbda) / 2 * self.sigma.reshape((1,1,-1))**2) * gmm_res_g**2
+        gmm_term = T.log(w_brdcst + 1e-8) - ((1 + all_lmbda) / (2 * self.sigma.reshape((1,1,-1))**2)) * gmm_res_g**2
         gmm_term += 0.5 * T.log(1 + all_lmbda) - 0.5 * T.log(2 * np.pi) - T.log(self.sigma.reshape((1,1,-1)))
         # LogDensity += T.log(T.exp(gmm_term).sum(axis=1)).sum()
-        LogDensity += logsumexp(gmm_term, axis=1).sum()
+        LogDensity += logsumexp(gmm_term.sum(axis=2), axis=1).sum()
 
         # linear penalty on goal state escaping game space
         if self.pen_g[0] is not None:
@@ -486,6 +484,7 @@ class GBDS(GenerativeModel):
         Return the learnable parameters of the model
         '''
         rets = lasagne.layers.get_all_params(self.GMM_net)
+        rets += [self.GMM_w_vals]
         rets += self.PID_params + [self.unc_eps]  #+ [self.unc_sigma]
         return rets
 
