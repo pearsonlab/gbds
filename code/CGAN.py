@@ -61,6 +61,7 @@ class CGAN(object):
         #     self.gen_net = get_network(batch_size, ndims_condition+ndims_subIDcond+ndims_noise, ndims_data, ndims_hidden, nlayers_G, init_std=init_std_G,
         #                                hidden_nonlin=nonlinearity, batchnorm=True)
         # else: #if this is the gan g0
+        #print("NDIMS CONDITION IS: " + str(ndims_condition))
         self.gen_net = get_network(batch_size, ndims_condition+ndims_noise, ndims_data, ndims_hidden, nlayers_G, init_std=init_std_G,
                                     hidden_nonlin=nonlinearity, batchnorm=True)
         # Neural network (D) that discriminates between real and generated data
@@ -114,11 +115,16 @@ class CGAN(object):
         Return generated sample from G given conditions.
         """
         #import pdb; pdb.set_trace()
+
+        #print("SHAPE OF CONDITIONS IS: " + str(T.shape(conditions).eval()))
+
+
         if self.condition_scale is not None:
             conditions /= self.condition_scale
         if self.condition_noise is not None and training:
             conditions += (self.condition_noise *
                            self.srng.normal(conditions.shape))
+
         #####
 
         # if self.compressbool:            
@@ -129,7 +135,7 @@ class CGAN(object):
         # else: #if gang0
         #conditions = conditions
         ######
-
+        #print('SHAPE OF CONDITIONS IS: ' + str(conditions.eval()))
         noise = 2 * self.srng.uniform((conditions.shape[0],
                                        self.ndims_noise)) - 1
         # noise = self.srng.normal((conditions.shape[0],

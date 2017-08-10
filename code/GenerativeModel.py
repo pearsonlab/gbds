@@ -326,6 +326,8 @@ class GBDS(GenerativeModel):
                            condition_noise=condition_noise,
                            condition_scale=condition_scale,
                            instance_noise=instance_noise)
+        #print("NLAYERSGEN IS: " + str(nlayers_gen))
+        #print("STATE DIM IS: " + str(state_dim))
 
     def init_GAN(self, nlayers_gen, nlayers_discr, noise_dim,
                  hidden_dim, batch_size, nonlinearity=leaky_rectify,
