@@ -306,7 +306,7 @@ class GBDS(GenerativeModel):
         self.eps = T.nnet.softplus(self.unc_eps)
 
     def init_CGAN(self, nlayers_gen, nlayers_discr, nlayers_compress, state_dim, subID_dim, compress_dim, noise_dim,
-                  hidden_dim, batch_size, compressbool=False,nonlinearity=leaky_rectify,
+                  hidden_dim, batch_size, compressbool,nonlinearity=leaky_rectify,
                   init_std_G=1.0, init_std_D=0.005,
                   condition_noise=None,
                   condition_scale=None, instance_noise=None,gamma=None, improveWGAN=False, lmbda=10):
