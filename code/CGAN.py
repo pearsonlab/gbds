@@ -155,7 +155,7 @@ class CGAN(object):
                      self.srng.normal((data.shape)))
 
         #####
-        if subIDconds:
+        if subIDconds is not None:
             conditions = T.horizontal_stack(conditions, subIDconds)
         ######
 
