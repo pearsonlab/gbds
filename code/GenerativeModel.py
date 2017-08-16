@@ -524,7 +524,7 @@ class GBDS(GenerativeModel):
             raise Exception("Invalid mode. Provide 'G' for generator loss " +
                             "or 'D' for discriminator loss.")
 
-    def evaluateLogDensity(self, g, Y, U):
+    def evaluateLogDensity(self, g, Y, U, subID):
         '''
         Return a theano function that evaluates the log-density of the
         GenerativeModel.
@@ -542,7 +542,7 @@ class GBDS(GenerativeModel):
         # disregard last timestep bc we don't know the next value, thus, we
         # can't calculate the error
         Jpred, g_pred, Upred = self.get_preds(Y[:-1],
-                                              U[:-1],
+                                              U[:-1], subID,
                                               training=True,
                                               post_g=g,
                                               postJ=self.postJ)

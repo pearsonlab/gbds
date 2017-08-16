@@ -183,9 +183,9 @@ class SGVB_GBDS():#(Trainable):
         cost = 0
         if self.isTrainingGenerativeModel or self.isTrainingRecognitionModel:
             cost += self.mprior_goalie.evaluateLogDensity(
-                q[:, self.yCols_goalie], self.Y, self.U[:, self.UCols_goalieJS])
+                q[:, self.yCols_goalie], self.Y, self.U[:, self.UCols_goalieJS], self.sub)
             cost += self.mprior_ball.evaluateLogDensity(
-                q[:, self.yCols_ball], self.Y, self.U[:, self.UCols_ballJS])
+                q[:, self.yCols_ball], self.Y, self.U[:, self.UCols_ballJS], self.sub)
         if self.isTrainingRecognitionModel:
             cost += self.mrec.evalEntropy()
         if self.isTrainingCGANGenerator:
