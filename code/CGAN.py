@@ -120,6 +120,8 @@ class CGAN(object):
         if self.condition_noise is not None and training:
             conditions += (self.condition_noise *
                            self.srng.normal(conditions.shape))
+            if subIDconds is not None:
+                subIDconds += (self.condition_noise * self.srng.normal(subIDconds.shape))
         #####
 
         if self.compressbool:            
