@@ -24,6 +24,7 @@ import lasagne
 import theano.tensor as T
 from nn_utils import get_network
 from lasagne.nonlinearities import leaky_rectify
+import theano
 
 
 class CGAN(object):
@@ -201,7 +202,16 @@ class CGAN(object):
             else:
                 interp_discr_out = self.get_discr_vals(interpolates, condition, training=True)
             gradients = T.grad(interp_discr_out.sum(), interpolates)
-            slopes = T.sqrt((gradients**2).sum(axis=1))  # gradient norms
+            slopes = T.sqrt((gradients**2).sum(axis=1))  # gradient norms            
+            
+            # x = theano.tensor.matrix('x')
+            # grad_printed = theano.printing.Print('gradient norms')(x)
+            # f_with_print = theano.function([x], grad_printed)
+            # f_with_print([slopes])
+            #f = theano.function([gradients], slopes)   # compile function
+            #print(slopes.eval())
+
+
             gradient_penalty = T.mean((slopes - 1)**2)
             cost -= self.lmbda * gradient_penalty
 
