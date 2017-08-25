@@ -38,16 +38,22 @@ class CGAN(object):
 
     ndims_condition is all of the conditions minus noise and minus subID!
     """
-    def __init__(self, nlayers_G, nlayers_D, ndims_condition, ndims_noise, ndims_hidden, ndims_data, batch_size,srng,compressbool=False,
-                 nlayers_C=None, ndims_subIDcond=None, ndims_compress=None,                 
+    def __init__(self, nlayers_G, nlayers_D, ndims_condition, ndims_noise, ndims_hidden, ndims_data, batch_size,srng,compressbool=False, Ebool=False,
+                 nlayers_C=None, nlayers_E=None, ndims_subIDcond=None, ndims_compress=None,                 
                  nonlinearity=leaky_rectify, init_std_G=1.0,
                  init_std_D=0.005,
                  condition_noise=None, condition_scale=None,
-                 instance_noise=None, gamma=None, improveWGAN=False, lmbda=10):
-        #import pdb; pdb.set_trace()
-        #if nlayers_C == None:
-        #    self.compressbool = False
-        #else: self.compressbool = True
+                 instance_noise=None, gamma=None, improveWGAN=False, lmbda=10, lambda1=None):        
+
+        ###################################these dims are probs wrong
+        # if Enet:
+        #     self.gen_net = get_network(batch_size,
+        #                            ndims_condcompress + ndims_noise, ndims_data,
+        #                            ndims_hidden, nlayers_G,
+        #                            init_std=init_std_G,
+        #                            hidden_nonlin=nonlinearity,
+        #                            batchnorm=True)
+        ###################################
 
         if compressbool:
             ndims_condcompress = ndims_condition + ndims_compress #6+2+10(compress)
@@ -81,6 +87,17 @@ class CGAN(object):
         if compressbool:
             self.compress_net = get_network(batch_size, ndims_subIDcond, ndims_compress, 
                                             1, nlayers_C, init_std=1.0, hidden_nonlin=nonlinearity, batchnorm=False, add_bias=False)
+
+        ########################
+        if Ebool:
+            self.E_net = get_network(batch_size,
+                                   ndims_data+ndims_condition+ndims_subIDcond, ndims_noise,
+                                   ndims_hidden, nlayers_E,
+                                   init_std=1.0,
+                                   hidden_nonlin=nonlinearity,
+                                   batchnorm=True)
+        ########################
+
         # size of minibatches (number of rows)
         self.batch_size = batch_size
         # symbolic random number generator
@@ -110,6 +127,7 @@ class CGAN(object):
         self.improveWGAN = improveWGAN
         self.lmbda = lmbda
         self.compressbool = compressbool
+        self.lambda1 = lambda1
 
     def get_generated_data(self, conditions, subIDconds=None, training=False):   ### add subID argument
         """
@@ -123,7 +141,7 @@ class CGAN(object):
                            self.srng.normal(conditions.shape))
             if subIDconds is not None:
                 subIDconds += (self.condition_noise * self.srng.normal(subIDconds.shape))
-        #####
+        
 
         if self.compressbool:            
             compress = lasagne.layers.get_output(self.compress_net, inputs=subIDconds, deterministic=(not training))
@@ -132,12 +150,10 @@ class CGAN(object):
             conditions = T.horizontal_stack(conditions, subIDconds)
         else: #if gang0
             conditions = conditions
-        ######
+        
 
         noise = 2 * self.srng.uniform((conditions.shape[0],
                                        self.ndims_noise)) - 1
-        # noise = self.srng.normal((conditions.shape[0],
-        #                           self.ndims_noise))
         inp = T.horizontal_stack(noise, conditions)
         gen_data = lasagne.layers.get_output(self.gen_net, inputs=inp,
                                              deterministic=(not training))
@@ -150,10 +166,10 @@ class CGAN(object):
         """
         if self.condition_scale is not None:
             conditions /= self.condition_scale
-        #####
+        
         if subIDconds is not None:
             conditions = T.horizontal_stack(conditions, subIDconds)
-        ######
+        
         if self.condition_noise is not None and training:
             conditions += (self.condition_noise *
                            self.srng.normal(conditions.shape))
@@ -176,6 +192,9 @@ class CGAN(object):
 
     def get_discr_params(self):
         return lasagne.layers.get_all_params(self.discr_net, trainable=True)
+
+    def get_encoder_params(self):
+        return lasagne.layers.get_all_params(self.E_net, trainable=True)
 
     def get_discr_cost(self, real_data, fake_data, conditions, subID=None):
         if subID:
@@ -201,16 +220,7 @@ class CGAN(object):
             else:
                 interp_discr_out = self.get_discr_vals(interpolates, condition, training=True)
             gradients = T.grad(interp_discr_out.sum(), interpolates)
-            slopes = T.sqrt((gradients**2).sum(axis=1))  # gradient norms            
-            
-            # x = theano.tensor.matrix('x')
-            # grad_printed = theano.printing.Print('gradient norms')(x)
-            # f_with_print = theano.function([x], grad_printed)
-            # f_with_print([slopes])
-            #f = theano.function([gradients], slopes)   # compile function
-            #print(slopes.eval())
-
-
+            slopes = T.sqrt((gradients**2).sum(axis=1))  # gradient norms  
             gradient_penalty = T.mean((slopes - 1)**2)
             cost -= self.lmbda * gradient_penalty
 
@@ -231,6 +241,42 @@ class CGAN(object):
             cost = fake_discr_out.mean()
         return cost
 
+    def get_encode_cost(self, real_data, conditions, subID=None):
+        #import pdb; pdb.set_trace()
+
+        #assemble the data for encoder input
+        if subID is not None:
+            conds = T.horizontal_stack(conditions, subID)       
+        inp = T.horizontal_stack(real_data, conds)
+
+
+        #get the output of E(x):
+        Ex = lasagne.layers.get_output(self.E_net, inputs=inp, deterministic=False)
+
+        #assemble the data for generator input
+        # if self.condition_scale is not None:
+        #     conditions /= self.condition_scale
+        # if self.condition_noise is not None:
+        #     conditions += (self.condition_noise * self.srng.normal(conditions.shape))
+        #     if subID is not None:
+        #         subID += (self.condition_noise * self.srng.normal(subID.shape))
+        
+        if self.compressbool:            
+            compress = lasagne.layers.get_output(self.compress_net, inputs=subID, deterministic=False)
+            conditions = T.horizontal_stack(conditions, compress)
+        elif subID:
+            conditions = T.horizontal_stack(conditions, subID)                
+
+        #stack the output of E(x) to feed into G
+        inputsG = T.horizontal_stack(Ex, conditions)
+        gen_E_out = lasagne.layers.get_output(self.gen_net, inputs=inputsG, deterministic=False)
+
+        #l2 distance between gen_E_out and input to E
+        #sub, elem square, sum
+        l2dist = ((gen_E_out - inp)**2).sum()
+        cost = self.lambda1 * l2dist
+
+        return cost
 
 class WGAN(object):
     """

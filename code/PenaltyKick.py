@@ -117,6 +117,9 @@ class SGVB_GBDS():#(Trainable):
         if self.isTrainingCGANDiscriminator:
             params += self.mprior_ball.CGAN_J.get_discr_params()
             params += self.mprior_goalie.CGAN_J.get_discr_params()
+        if self.isTrainingCGANEncoder:
+            params += self.mprior_ball.CGAN_J.get_encoder_params()
+            params += self.mprior_goalie.CGAN_J.get_encoder_params()
         if self.isTrainingGANGenerator:
             params += self.mprior_ball.GAN_g0.get_gen_params()
             params += self.mprior_goalie.GAN_g0.get_gen_params()
@@ -141,6 +144,7 @@ class SGVB_GBDS():#(Trainable):
             self.isTrainingRecognitionModel = True
             self.isTrainingCGANGenerator = False
             self.isTrainingCGANDiscriminator = False
+            self.isTrainingCGANEncoder = False
             self.isTrainingGANGenerator = False
             self.isTrainingGANDiscriminator = False
         elif mode == 'CGAN_G':
@@ -148,6 +152,7 @@ class SGVB_GBDS():#(Trainable):
             self.isTrainingRecognitionModel = False
             self.isTrainingCGANGenerator = True
             self.isTrainingCGANDiscriminator = False
+            self.isTrainingCGANEncoder = False
             self.isTrainingGANGenerator = False
             self.isTrainingGANDiscriminator = False
         elif mode == 'CGAN_D':
@@ -155,6 +160,15 @@ class SGVB_GBDS():#(Trainable):
             self.isTrainingRecognitionModel = False
             self.isTrainingCGANGenerator = False
             self.isTrainingCGANDiscriminator = True
+            self.isTrainingCGANEncoder = False
+            self.isTrainingGANGenerator = False
+            self.isTrainingGANDiscriminator = False
+        elif mode == 'CGAN_E':
+            self.isTrainingGenerativeModel = False
+            self.isTrainingRecognitionModel = False
+            self.isTrainingCGANGenerator = False
+            self.isTrainingCGANDiscriminator = False
+            self.isTrainingCGANEncoder = True
             self.isTrainingGANGenerator = False
             self.isTrainingGANDiscriminator = False
         elif mode == 'GAN_G':
@@ -162,6 +176,7 @@ class SGVB_GBDS():#(Trainable):
             self.isTrainingRecognitionModel = False
             self.isTrainingCGANGenerator = False
             self.isTrainingCGANDiscriminator = False
+            self.isTrainingCGANEncoder = False
             self.isTrainingGANGenerator = True
             self.isTrainingGANDiscriminator = False
         elif mode == 'GAN_D':
@@ -169,6 +184,7 @@ class SGVB_GBDS():#(Trainable):
             self.isTrainingRecognitionModel = False
             self.isTrainingCGANGenerator = False
             self.isTrainingCGANDiscriminator = False
+            self.isTrainingCGANEncoder = False
             self.isTrainingGANGenerator = False
             self.isTrainingGANDiscriminator = True
 
@@ -198,6 +214,11 @@ class SGVB_GBDS():#(Trainable):
                                                       self.s, self.sub, mode='D')
             cost += self.mprior_goalie.evaluateCGANLoss(
                 self.J[:, JCols_goalie], self.s, self.sub, mode='D')
+        if self.isTrainingCGANEncoder:
+            cost += self.mprior_ball.evaluateCGANLoss(self.J[:, JCols_ball],
+                                                      self.s, self.sub, mode='E')
+            cost += self.mprior_goalie.evaluateCGANLoss(
+                self.J[:, JCols_goalie], self.s, self.sub, mode='E')
         if self.isTrainingGANGenerator:
             cost += self.mprior_ball.evaluateGANLoss(self.g0[:, self.yCols_ball],
                                                      g0_conds=self.g0_conds,
