@@ -121,8 +121,8 @@ class CGAN(object):
         if self.condition_noise is not None and training:
             conditions += (self.condition_noise *
                            self.srng.normal(conditions.shape))
-            if subIDconds is not None:
-                subIDconds += (self.condition_noise * self.srng.normal(subIDconds.shape))
+            # if subIDconds is not None:
+            #     subIDconds += (self.condition_noise * self.srng.normal(subIDconds.shape))
         #####
 
         if self.compressbool:            
@@ -150,15 +150,16 @@ class CGAN(object):
         """
         if self.condition_scale is not None:
             conditions /= self.condition_scale
-        #####
-        if subIDconds is not None:
-            conditions = T.horizontal_stack(conditions, subIDconds)
-        ######
+        
         if self.condition_noise is not None and training:
             conditions += (self.condition_noise *
                            self.srng.normal(conditions.shape))
-            # if subIDconds is not None:
-            #     subIDconds += (self.condition_noise * self.srng.normal(subIDconds.shape))
+
+        ####
+        if subIDconds is not None:
+            conditions = T.horizontal_stack(conditions, subIDconds)
+        #####
+         
         if self.instance_noise is not None and training:
             data += (self.instance_noise *
                      self.srng.normal((data.shape)))
