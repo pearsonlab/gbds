@@ -309,7 +309,7 @@ class GBDS(GenerativeModel):
                   hidden_dim, batch_size, compressbool, Ebool, nonlinearity=leaky_rectify,
                   init_std_G=1.0, init_std_D=0.005,
                   condition_noise=None,
-                  condition_scale=None, instance_noise=None,gamma=None, improveWGAN=False, lmbda=10, lambda1=None):
+                  condition_scale=None, instance_noise=None,gamma=None, improveWGAN=False, lmbda=10, lambda1=None, lambda2=None):
         """
         Initialize Conditional Generative Adversarial Network that generates
         Gaussian mixture components, J (mu and sigma), from states and random
@@ -325,7 +325,7 @@ class GBDS(GenerativeModel):
                            init_std_D=init_std_D,
                            condition_noise=condition_noise,
                            condition_scale=condition_scale,
-                           instance_noise=instance_noise,gamma=gamma, improveWGAN=improveWGAN, lmbda=lmbda, lambda1=lambda1)
+                           instance_noise=instance_noise,gamma=gamma, improveWGAN=improveWGAN, lmbda=lmbda, lambda1=lambda1, lambda2=lambda2)
 
     def init_GAN(self, nlayers_gen, nlayers_discr, noise_dim,
                  hidden_dim, batch_size, nonlinearity=leaky_rectify,
@@ -515,7 +515,7 @@ class GBDS(GenerativeModel):
             return self.CGAN_J.get_discr_cost(postJ, genJ,
                                               states, subID)
         elif mode == 'G':
-            return self.CGAN_J.get_gen_cost(genJ, states, subID)
+            return self.CGAN_J.get_gen_cost(postJ, genJ, states, subID)
         elif mode == 'E':
             return self.CGAN_J.get_encode_cost(postJ, states, subID)
         else:

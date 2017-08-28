@@ -20,6 +20,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
+from __future__ import print_function
 import lasagne
 import theano.tensor as T
 from nn_utils import get_network
@@ -43,7 +44,7 @@ class CGAN(object):
                  nonlinearity=leaky_rectify, init_std_G=1.0,
                  init_std_D=0.005,
                  condition_noise=None, condition_scale=None,
-                 instance_noise=None, gamma=None, improveWGAN=False, lmbda=10, lambda1=None):        
+                 instance_noise=None, gamma=None, improveWGAN=False, lmbda=10, lambda1=None, lambda2=None):        
 
         ###################################these dims are probs wrong
         # if Enet:
@@ -128,6 +129,8 @@ class CGAN(object):
         self.lmbda = lmbda
         self.compressbool = compressbool
         self.lambda1 = lambda1
+        self.lambda2 = lambda2
+        self.Ebool = Ebool
 
     def get_generated_data(self, conditions, subIDconds=None, training=False):   ### add subID argument
         """
@@ -226,7 +229,7 @@ class CGAN(object):
 
         return cost
 
-    def get_gen_cost(self, gen_data, conditions, subID=None):
+    def get_gen_cost(self, real_data, gen_data, conditions, subID=None):
         if subID:
             fake_discr_out = self.get_discr_vals(gen_data, conditions, subID, training=True)
         else:
@@ -239,6 +242,12 @@ class CGAN(object):
             cost = fake_discr_out.mean() - penalty
         else:
             cost = fake_discr_out.mean()
+
+        #Now, if we are using the encode network, add the two penalty terms to the original generator cost
+        if self.Ebool:
+            encoder_cost = self.get_encode_cost(real_data, conditions, subID)
+            cost = cost - encoder_cost #mind the signs, see equation 1 of Che et al 2017
+
         return cost
 
     def get_encode_cost(self, real_data, conditions, subID=None):
@@ -248,7 +257,6 @@ class CGAN(object):
         if subID is not None:
             conds = T.horizontal_stack(conditions, subID)       
         inp = T.horizontal_stack(real_data, conds)
-
 
         #get the output of E(x):
         Ex = lasagne.layers.get_output(self.E_net, inputs=inp, deterministic=False)
@@ -263,20 +271,36 @@ class CGAN(object):
         
         if self.compressbool:            
             compress = lasagne.layers.get_output(self.compress_net, inputs=subID, deterministic=False)
-            conditions = T.horizontal_stack(conditions, compress)
+            conds = T.horizontal_stack(conditions, compress)
         elif subID:
-            conditions = T.horizontal_stack(conditions, subID)                
+            conds = T.horizontal_stack(conditions, subID)                
 
         #stack the output of E(x) to feed into G
-        inputsG = T.horizontal_stack(Ex, conditions)
+        inputsG = T.horizontal_stack(Ex, conds)
         gen_E_out = lasagne.layers.get_output(self.gen_net, inputs=inputsG, deterministic=False)
 
         #l2 distance between gen_E_out and input to E
         #sub, elem square, sum
-        l2dist = ((gen_E_out - inp)**2).sum()
-        cost = self.lambda1 * l2dist
+        l2dist = ((gen_E_out - real_data)**2).sum() 
+        cost1 = self.lambda1 * l2dist #first part of the penalty
 
-        return cost
+        #2nd part of penalty
+
+        #first, have to stack gen_E_out with conditions to feed into E_net
+        # conds = T.horizontal_stack(conditions, subID)       
+        # inp = T.horizontal_stack(gen_E_out, conds)
+
+        #e_discr_out = lasagne.layers.get_output(self.discr_net, inputs=inp, deterministic=False)
+        e_discr_out = self.get_discr_vals(gen_E_out, conditions, subID, training=True)
+        cost2 = self.lambda2 * e_discr_out.mean()
+
+        #x = theano.tensor.dvector('x')
+        # cost2_printed = theano.printing.Print('this is a very important value')(cost2)
+        # f_with_print = theano.function([cost2], cost2_printed + cost1)
+        # f_with_print([cost2])
+        #theano.pp(cost2)
+
+        return cost1 + cost2
 
 class WGAN(object):
     """
