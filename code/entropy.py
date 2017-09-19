@@ -53,7 +53,7 @@ if __name__ == '__main__':
     np.random.seed(12345)
     N, D = 3, 5
     mu = np.random.randn(N, D)
-    x = mu[0] + 0.01 * np.random.randn(N, D)
+    x = mu[0] + 0.01 * np.random.randn(D)
     L = np.tril(np.random.randn(N, D, D))
     for n in range(N):
         for d in range(D):
@@ -63,8 +63,8 @@ if __name__ == '__main__':
     w /= np.sum(w)
 
     lpdfs = []
+    xx = x
     for idx in range(N):
-        xx = x[idx]
         mm = mu[idx]
         Sig = np.linalg.inv(Lambda[idx])
         lpdfs.append(stats.multivariate_normal.logpdf(xx, mean=mm, cov=Sig))
