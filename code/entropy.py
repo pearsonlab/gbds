@@ -47,8 +47,10 @@ def mv_logpdf(x, w, mu, Lambda, chol=False):
     return logsumexp(np.log(w) + lpdf)
 
 if __name__ == '__main__':
-    np.random.seed(12345)
     import scipy.stats as stats
+    import numpy.testing as npt
+
+    np.random.seed(12345)
     N, D = 3, 5
     mu = np.random.randn(N, D)
     x = mu + 0.01 * np.random.randn(N, D)
@@ -71,3 +73,6 @@ if __name__ == '__main__':
 
     this_lpdf = mv_logpdf(x, w, mu, Lambda)
     this_lpdf_chol = mv_logpdf(x, w, mu, L, True)
+
+    npt.assert_approx_equal(np_lpdf, this_lpdf)
+    npt.assert_approx_equal(np_lpdf, this_lpdf_chol)
