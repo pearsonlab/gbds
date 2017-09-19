@@ -23,7 +23,7 @@ def mv_logpdf(x, w, mu, Lambda, chol=False):
     Log probability density function of mixture of multivariate normals with mean mu and precision Lambda.
 
     Parameters:
-        x: (N, D) numpy array of inputs.
+        x: (D,) numpy vector of inputs.
         w: (N,) numpy vector of weights.
         mu: (N, D) numpy array of means.
         Lambda: (N, D, D) numpy array of precision matrices.
@@ -53,7 +53,7 @@ if __name__ == '__main__':
     np.random.seed(12345)
     N, D = 3, 5
     mu = np.random.randn(N, D)
-    x = mu + 0.01 * np.random.randn(N, D)
+    x = mu[0] + 0.01 * np.random.randn(N, D)
     L = np.tril(np.random.randn(N, D, D))
     for n in range(N):
         for d in range(D):
