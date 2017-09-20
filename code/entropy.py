@@ -205,6 +205,16 @@ def H_ub(w, mu, Lambda, chol=False, loose=True):
 
     return H
 
+# TODO: Implement splitting of high-variance Gaussians as detailed in Huber et al.
+# The difficulty is efficiency: to identify the highest-variance Gaussian, we
+# must do an eigenvalue decomposition on all precision matrices
+# after that, implementing the split along the smallest precision eigenvalue,
+# rotating back, and replacing the relevant mu and Lambdas in new lists mu'
+# and Lambda' isn't onerous
+# IMPORTANT: As detailed in notes, the new, split Gaussians only enter into f,
+# not g, so we want normed_grad(mu', mu, Lambda, chol) and the same for
+# normed_hess, as well as Lambda' used in calculating H2
+
 if __name__ == '__main__':
     import scipy.stats as stats
     import numpy.testing as npt
