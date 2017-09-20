@@ -18,7 +18,7 @@ def H0(w, mu, Lambda, chol=False):
     """
     return -w.dot(mv_logpdf(mu, w, mu, Lambda, chol))
 
-def mv_logpdf_comps(x, mu, Lambda, chol=False):
+def mv_logpdf_components(x, mu, Lambda, chol=False):
     """
     Log probability density function for each component of mixture of K
     multivariate normals with mean mu and precision Lambda.
@@ -57,16 +57,16 @@ def mv_logpdf(x, w, mu, Lambda, chol=False):
         Lambda: (K, D, D) numpy array of precision matrices.
         chol: is Lambda in fact the Cholesky factor L of the precision?
     """
-    return logsumexp(np.log(w) + mv_logpdf_comps(x, mu, Lambda, chol), axis=1)
+    return logsumexp(np.log(w) + mv_logpdf_components(x, mu, Lambda, chol), axis=1)
 
-def _calc_wg(x, mu, Lambda, chol):
-    logg = mv_logpdf_comps(x, mu, Lambda, chol)
+def _calc_pdf_components(x, mu, Lambda, chol):
+    logg = mv_logpdf_components(x, mu, Lambda, chol)
     # now normalize relative to smallest probability to prevent underflow
     logg = logg - np.min(logg, axis=1, keepdims=True)
 
     return w * np.exp(logg)
 
-def _calc_m(x, mu, Lambda, chol):
+def _calc_vector_components(x, mu, Lambda, chol):
     dx = x[:, np.newaxis] - mu[np.newaxis]
     if chol:
         m = np.einsum('kij, klj, nkl -> nki', Lambda, Lambda, dx)
@@ -86,8 +86,8 @@ def normed_grad(x, w, mu, Lambda, chol=False):
         Lambda: (K, D, D) numpy array of precision matrices.
         chol: is Lambda in fact the Cholesky factor L of the precision?
     """
-    wg = _calc_wg(x, mu, Lambda, chol)
-    m = _calc_m(x, mu, Lambda, chol)
+    wg = _calc_pdf_components(x, mu, Lambda, chol)
+    m = _calc_vector_components(x, mu, Lambda, chol)
 
     return np.einsum('nk, nki -> ni', wg, m)/np.sum(wg, axis=1, keepdims=True)
 
@@ -102,8 +102,8 @@ def normed_hess(x, w, mu, Lambda, chol=False):
         Lambda: (K, D, D) numpy array of precision matrices.
         chol: is Lambda in fact the Cholesky factor L of the precision?
     """
-    wg = _calc_wg(x, mu, Lambda, chol)
-    m = _calc_m(x, mu, Lambda, chol)
+    wg = _calc_pdf_components(x, mu, Lambda, chol)
+    m = _calc_vector_components(x, mu, Lambda, chol)
 
     if chol:
         Prec = np.einsum('nij, nlj -> nil', Lambda, Lambda)
@@ -166,7 +166,7 @@ if __name__ == '__main__':
     npt.assert_allclose(np_H0, this_H0_chol)
 
     # test normed_grad, normed_hess
-    log_comps = mv_logpdf_comps(x, mu, Lambda)
+    log_comps = mv_logpdf_components(x, mu, Lambda)
     wg = w * np.exp(log_comps)
     xx = x
     mlist = []
