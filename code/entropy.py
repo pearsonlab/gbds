@@ -137,6 +137,7 @@ def H2(w, mu, Lambda, chol=False):
         w: (K,) numpy vector of weights.
         mu: (K, D) numpy array of means.
         Lambda: (K, D, D) numpy array of precision matrices.
+        chol: is Lambda in fact the Cholesky factor L of the precision?
     """
     K = w.shape[0]
     h = normed_grad(mu, w, mu, Lambda, chol)
@@ -158,6 +159,27 @@ def H2(w, mu, Lambda, chol=False):
             HH += w[idx] * (-h[idx].dot(Laminvh) + np.trace(LaminvH))
 
     return -0.5 * HH
+
+def H_lb(w, mu, Lambda, chol=False):
+    """
+    Calculate a lower bound on the entropy of the mixture.
+
+    Parameters:
+        w: (K,) numpy vector of weights.
+        mu: (K, D) numpy array of means.
+        Lambda: (K, D, D) numpy array of precision matrices.
+        chol: is Lambda in fact the Cholesky factor L of the precision?
+    """
+    K = w.shape[0]
+    if chol:
+        Prec = np.einsum('nij, nlj -> nil', Lambda, Lambda)
+    else:
+        Prec = Lambda
+    cov = np.array([np.linalg.inv(Prec[k]) for k in range(K)])
+    z = np.array([[stats.multivariate_normal.pdf(mu[i], mean=mu[j],
+                cov=cov[i] + cov[j]) for i in range(K)] for j in range(K)])
+
+    return -w.dot(np.log(z.dot(w)))
 
 if __name__ == '__main__':
     import scipy.stats as stats
@@ -244,3 +266,7 @@ if __name__ == '__main__':
     this_H2 = H2(w, mu, Lambda)
     npt.assert_allclose(np_H2, H2(w, mu, Lambda))
     npt.assert_allclose(np_H2, H2(w, mu, L, True))
+
+    # test bounds
+    assert H0(w, mu, Lambda) + H2(w, mu, Lambda) >= H_lb(w, mu, Lambda)
+    assert H0(w, mu, L, True) + H2(w, mu, L, True) >= H_lb(w, mu, L, True)
