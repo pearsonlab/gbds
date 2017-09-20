@@ -4,6 +4,7 @@ Huber et al. 'On Entropy Approximation for Gaussian Mixture Random Vectors'
 (2008)
 """
 import numpy as np
+import scipy.stats as stats
 from scipy.misc import logsumexp
 
 def H0(w, mu, Lambda, chol=False):
@@ -18,6 +19,34 @@ def H0(w, mu, Lambda, chol=False):
     """
     return -w.dot(mv_logpdf(mu, w, mu, Lambda, chol))
 
+def mv_logpdf_comps(x, mu, Lambda, chol=False):
+    """
+    Log probability density function for each component of mixture of K
+    multivariate normals with mean mu and precision Lambda.
+
+    Parameters:
+        x: (N, D) numpy array of N D-vector inputs.
+        mu: (K, D) numpy array of means.
+        Lambda: (K, D, D) numpy array of precision matrices.
+        chol: is Lambda in fact the Cholesky factor L of the precision?
+    """
+    dx = x[:, np.newaxis] - mu[np.newaxis]
+    if chol:
+        vv = np.einsum('kji, nkj -> nki', Lambda, dx)
+        lpdf = np.einsum('nkj, nkj -> nk', vv, vv)
+        lpdf *= -0.5
+        lpdf += -0.5 * D * np.log(2 * np.pi)
+        Ltrace = np.diagonal(L, axis1=1, axis2=2)
+        lpdf += np.sum(np.log(Ltrace), axis=1)
+    else:
+        lpdf = np.einsum('nkj, kji, nki -> nk', dx, Lambda, dx)
+        lpdf *= -0.5
+        lpdf += -0.5 * D * np.log(2 * np.pi)
+        lpdf += 0.5 * np.linalg.slogdet(Lambda)[1]
+
+    return lpdf
+
+
 def mv_logpdf(x, w, mu, Lambda, chol=False):
     """
     Log probability density function of mixture of K multivariate normals with mean mu and precision Lambda.
@@ -29,22 +58,34 @@ def mv_logpdf(x, w, mu, Lambda, chol=False):
         Lambda: (K, D, D) numpy array of precision matrices.
         chol: is Lambda in fact the Cholesky factor L of the precision?
     """
-    if chol:
-        dx = x[:, np.newaxis] - mu[np.newaxis]
-        vv = np.einsum('kji, nkj -> nki', Lambda, dx)
-        lpdf = np.einsum('nkj, nkj -> nk', vv, vv)
-        lpdf *= -0.5
-        lpdf += -0.5 * D * np.log(2 * np.pi)
-        Ltrace = np.diagonal(L, axis1=1, axis2=2)
-        lpdf += np.sum(np.log(Ltrace), axis=1)
-    else:
-        dx = x[:, np.newaxis] - mu[np.newaxis]
-        lpdf = np.einsum('nkj, kji, nki -> nk', dx, Lambda, dx)
-        lpdf *= -0.5
-        lpdf += -0.5 * D * np.log(2 * np.pi)
-        lpdf += 0.5 * np.linalg.slogdet(Lambda)[1]
+    return logsumexp(np.log(w) + mv_logpdf_comps(x, mu, Lambda, chol), axis=1)
 
-    return logsumexp(np.log(w) + lpdf, axis=1)
+def normed_grad(x, w, mu, Lambda, chol=False):
+    """
+    Gradient of the Gaussian mixture model divided by pdf (d(log g) = dg / g)
+
+    Parameters:
+        x: (N, D) numpy array of N D-vector inputs.
+        w: (K,) numpy vector of weights.
+        mu: (K, D) numpy array of means.
+        Lambda: (K, D, D) numpy array of precision matrices.
+        chol: is Lambda in fact the Cholesky factor L of the precision?
+    """
+    logg = mv_logpdf_comps(x, mu, Lambda, chol)
+    # now normalize relative to smallest probability to prevent underflow
+    logg = logg - np.min(logg, axis=1, keepdims=True)
+
+    wg = w * np.exp(logg)
+    dx = x[:, np.newaxis] - mu[np.newaxis]
+    if chol:
+        m = np.einsum('kij, klj, nkl -> nki', Lambda, Lambda, dx)
+    else:
+        m = np.einsum('kij, nkj -> nki', Lambda, dx)
+
+    return np.einsum('nk, nki -> ni', wg, m)/np.sum(wg, axis=1, keepdims=True)
+
+
+
 
 if __name__ == '__main__':
     import scipy.stats as stats
@@ -94,3 +135,18 @@ if __name__ == '__main__':
 
     npt.assert_allclose(np_H0, this_H0)
     npt.assert_allclose(np_H0, this_H0_chol)
+
+    # test normed_grad, normed_hess
+    log_comps = mv_logpdf_comps(x, mu, Lambda)
+    wg = w * np.exp(log_comps)
+    xx = x
+    mlist = []
+    for idx in range(K):
+        mm = mu[idx]
+        dx = xx - mm
+        mlist.append(Lambda[idx].dot(dx.T).T)
+    m = np.array(mlist)
+    normed_g = np.einsum('nk, kni -> ni', wg, m)/np.sum(wg,
+                        axis=1, keepdims=True)
+    npt.assert_allclose(normed_g, normed_grad(x, w, mu, Lambda))
+    npt.assert_allclose(normed_g, normed_grad(x, w, mu, L, True))
