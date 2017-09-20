@@ -4,7 +4,6 @@ Huber et al. 'On Entropy Approximation for Gaussian Mixture Random Vectors'
 (2008)
 """
 import numpy as np
-import scipy.stats as stats
 from scipy.misc import logsumexp
 
 def H0(w, mu, Lambda, chol=False):
@@ -60,6 +59,22 @@ def mv_logpdf(x, w, mu, Lambda, chol=False):
     """
     return logsumexp(np.log(w) + mv_logpdf_comps(x, mu, Lambda, chol), axis=1)
 
+def _calc_wg(x, mu, Lambda, chol):
+    logg = mv_logpdf_comps(x, mu, Lambda, chol)
+    # now normalize relative to smallest probability to prevent underflow
+    logg = logg - np.min(logg, axis=1, keepdims=True)
+
+    return w * np.exp(logg)
+
+def _calc_m(x, mu, Lambda, chol):
+    dx = x[:, np.newaxis] - mu[np.newaxis]
+    if chol:
+        m = np.einsum('kij, klj, nkl -> nki', Lambda, Lambda, dx)
+    else:
+        m = np.einsum('kij, nkj -> nki', Lambda, dx)
+
+    return m
+
 def normed_grad(x, w, mu, Lambda, chol=False):
     """
     Gradient of the Gaussian mixture model divided by pdf (d(log g) = dg / g)
@@ -71,20 +86,29 @@ def normed_grad(x, w, mu, Lambda, chol=False):
         Lambda: (K, D, D) numpy array of precision matrices.
         chol: is Lambda in fact the Cholesky factor L of the precision?
     """
-    logg = mv_logpdf_comps(x, mu, Lambda, chol)
-    # now normalize relative to smallest probability to prevent underflow
-    logg = logg - np.min(logg, axis=1, keepdims=True)
-
-    wg = w * np.exp(logg)
-    dx = x[:, np.newaxis] - mu[np.newaxis]
-    if chol:
-        m = np.einsum('kij, klj, nkl -> nki', Lambda, Lambda, dx)
-    else:
-        m = np.einsum('kij, nkj -> nki', Lambda, dx)
+    wg = _calc_wg(x, mu, Lambda, chol)
+    m = _calc_m(x, mu, Lambda, chol)
 
     return np.einsum('nk, nki -> ni', wg, m)/np.sum(wg, axis=1, keepdims=True)
 
+def normed_hess(x, w, mu, Lambda, chol=False):
+    """
+    Hessian of the Gaussian mixture model divided by pdf (Hg / g)
 
+    Parameters:
+        x: (N, D) numpy array of N D-vector inputs.
+        w: (K,) numpy vector of weights.
+        mu: (K, D) numpy array of means.
+        Lambda: (K, D, D) numpy array of precision matrices.
+        chol: is Lambda in fact the Cholesky factor L of the precision?
+    """
+    wg = _calc_wg(x, mu, Lambda, chol)
+    m = _calc_m(x, mu, Lambda, chol)
+
+    H = np.einsum('nki, nkj -> nkij', m, m)
+    sum_wg = np.sum(wg, axis=1)
+
+    return np.einsum('nk, nkij -> nij', wg, H)/sum_wg[:, np.newaxis, np.newaxis]
 
 
 if __name__ == '__main__':
@@ -141,12 +165,23 @@ if __name__ == '__main__':
     wg = w * np.exp(log_comps)
     xx = x
     mlist = []
+    Hlist = []
     for idx in range(K):
         mm = mu[idx]
         dx = xx - mm
-        mlist.append(Lambda[idx].dot(dx.T).T)
+        this_m = Lambda[idx].dot(dx.T).T
+        mlist.append(this_m)
+
+        this_H = np.einsum('ni, nj -> nij', this_m, this_m)
+        Hlist.append(this_H)
+
     m = np.array(mlist)
-    normed_g = np.einsum('nk, kni -> ni', wg, m)/np.sum(wg,
-                        axis=1, keepdims=True)
+    Hg = np.array(Hlist)
+    wg_sum = np.sum(wg, axis=1)
+    normed_g = np.einsum('nk, kni -> ni', wg, m)/wg_sum[:, np.newaxis]
     npt.assert_allclose(normed_g, normed_grad(x, w, mu, Lambda))
     npt.assert_allclose(normed_g, normed_grad(x, w, mu, L, True))
+
+    normed_H = np.einsum('nk, knij -> nij', wg, Hg)/wg_sum[:, np.newaxis, np.newaxis]
+    npt.assert_allclose(normed_H, normed_hess(x, w, mu, Lambda))
+    npt.assert_allclose(normed_H, normed_hess(x, w, mu, L, True))
