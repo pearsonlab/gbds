@@ -105,7 +105,12 @@ def normed_hess(x, w, mu, Lambda, chol=False):
     wg = _calc_wg(x, mu, Lambda, chol)
     m = _calc_m(x, mu, Lambda, chol)
 
-    H = np.einsum('nki, nkj -> nkij', m, m)
+    if chol:
+        Prec = np.einsum('nij, nlj -> nil', Lambda, Lambda)
+    else:
+        Prec = Lambda
+    H = np.einsum('nki, nkj -> nkij', m, m) - Prec
+
     sum_wg = np.sum(wg, axis=1)
 
     return np.einsum('nk, nkij -> nij', wg, H)/sum_wg[:, np.newaxis, np.newaxis]
@@ -172,7 +177,7 @@ if __name__ == '__main__':
         this_m = Lambda[idx].dot(dx.T).T
         mlist.append(this_m)
 
-        this_H = np.einsum('ni, nj -> nij', this_m, this_m)
+        this_H = np.einsum('ni, nj -> nij', this_m, this_m) - Lambda[idx]
         Hlist.append(this_H)
 
     m = np.array(mlist)
