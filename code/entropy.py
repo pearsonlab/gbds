@@ -6,6 +6,7 @@ Huber et al. 'On Entropy Approximation for Gaussian Mixture Random Vectors'
 import numpy as np
 from scipy.misc import logsumexp
 from scipy.linalg import solve, solve_triangular
+import scipy.stats as stats
 
 def H0(w, mu, Lambda, chol=False):
     """
@@ -181,6 +182,29 @@ def H_lb(w, mu, Lambda, chol=False):
 
     return -w.dot(np.log(z.dot(w)))
 
+def H_ub(w, mu, Lambda, chol=False, loose=True):
+    """
+    Calculate an upper bound on the entropy of the mixture.
+
+    Parameters:
+        w: (K,) numpy vector of weights.
+        mu: (K, D) numpy array of means.
+        Lambda: (K, D, D) numpy array of precision matrices.
+        chol: is Lambda in fact the Cholesky factor L of the precision?
+        loose: calculate loose (basic) upper bound, or one based on merging?
+    """
+    D = mu.shape[1]
+
+    H = -w.dot(np.log(w))
+    H += (D/2) * (np.log(2 * np.pi) + 1)
+    if chol:
+        H += -w.dot(np.sum(np.log(
+            np.diagonal(Lambda, axis1=1, axis2=2)), axis=1))
+    else:
+        H += -0.5 * w.dot(np.linalg.slogdet(Lambda)[1])
+
+    return H
+
 if __name__ == '__main__':
     import scipy.stats as stats
     import numpy.testing as npt
@@ -189,7 +213,7 @@ if __name__ == '__main__':
     K, D, N = 3, 5, 7
     mu = np.random.randn(K, D)
     x = mu[0] + 0.01 * np.random.randn(N, D)
-    L = 5 * np.tril(np.random.randn(K, D, D))
+    L = 3 * np.tril(np.random.randn(K, D, D))
     for k in range(K):
         for d in range(D):
             L[k, d, d] = np.abs(L[k, d, d])
@@ -268,5 +292,9 @@ if __name__ == '__main__':
     npt.assert_allclose(np_H2, H2(w, mu, L, True))
 
     # test bounds
+    npt.assert_approx_equal(H_lb(w, mu, Lambda), H_lb(w, mu, L, True))
     assert H0(w, mu, Lambda) + H2(w, mu, Lambda) >= H_lb(w, mu, Lambda)
-    assert H0(w, mu, L, True) + H2(w, mu, L, True) >= H_lb(w, mu, L, True)
+    assert H0(w, mu, L, True) + H2(w, mu, L, True) >= H_lb(w, mu, Lambda)
+    npt.assert_approx_equal(H_ub(w, mu, Lambda), H_ub(w, mu, L, True))
+    assert H0(w, mu, Lambda) + H2(w, mu, Lambda) <= H_ub(w, mu, Lambda)
+    assert H0(w, mu, L, True) + H2(w, mu, L, True) <= H_ub(w, mu, L, True)
