@@ -5,6 +5,7 @@ Huber et al. 'On Entropy Approximation for Gaussian Mixture Random Vectors'
 """
 import numpy as np
 from scipy.misc import logsumexp
+from scipy.linalg import solve, solve_triangular
 
 def H0(w, mu, Lambda, chol=False):
     """
@@ -12,9 +13,9 @@ def H0(w, mu, Lambda, chol=False):
     about each of the mixture component means.
 
     Parameters:
-        w: (N,) numpy vector of weights.
-        mu: (N, D) numpy array of means.
-        Lambda: (N, D, D) numpy array of precision matrices.
+        w: (K,) numpy vector of weights.
+        mu: (K, D) numpy array of means.
+        Lambda: (K, D, D) numpy array of precision matrices.
     """
     return -w.dot(mv_logpdf(mu, w, mu, Lambda, chol))
 
@@ -28,6 +29,9 @@ def mv_logpdf_components(x, mu, Lambda, chol=False):
         mu: (K, D) numpy array of means.
         Lambda: (K, D, D) numpy array of precision matrices.
         chol: is Lambda in fact the Cholesky factor L of the precision?
+
+    Returns:
+        lpdf: (N, K) numpy array of logpdfs for each input, mixture component
     """
     dx = x[:, np.newaxis] - mu[np.newaxis]
     if chol:
@@ -56,10 +60,13 @@ def mv_logpdf(x, w, mu, Lambda, chol=False):
         mu: (K, D) numpy array of means.
         Lambda: (K, D, D) numpy array of precision matrices.
         chol: is Lambda in fact the Cholesky factor L of the precision?
+
+    Returns:
+        (N,) numpy array of logpdfs for each input
     """
     return logsumexp(np.log(w) + mv_logpdf_components(x, mu, Lambda, chol), axis=1)
 
-def _calc_pdf_components(x, mu, Lambda, chol):
+def _calc_rel_pdf_components(x, mu, Lambda, chol):
     logg = mv_logpdf_components(x, mu, Lambda, chol)
     # now normalize relative to smallest probability to prevent underflow
     logg = logg - np.min(logg, axis=1, keepdims=True)
@@ -85,8 +92,11 @@ def normed_grad(x, w, mu, Lambda, chol=False):
         mu: (K, D) numpy array of means.
         Lambda: (K, D, D) numpy array of precision matrices.
         chol: is Lambda in fact the Cholesky factor L of the precision?
+
+    Returns:
+        (N, D) numpy array of D-vector normed gradients (one per example)
     """
-    wg = _calc_pdf_components(x, mu, Lambda, chol)
+    wg = _calc_rel_pdf_components(x, mu, Lambda, chol)
     m = _calc_vector_components(x, mu, Lambda, chol)
 
     return np.einsum('nk, nki -> ni', wg, m)/np.sum(wg, axis=1, keepdims=True)
@@ -101,8 +111,11 @@ def normed_hess(x, w, mu, Lambda, chol=False):
         mu: (K, D) numpy array of means.
         Lambda: (K, D, D) numpy array of precision matrices.
         chol: is Lambda in fact the Cholesky factor L of the precision?
+
+    Returns:
+        (N, D, D) numpy array of D-matrix normed Hessians (one per example)
     """
-    wg = _calc_pdf_components(x, mu, Lambda, chol)
+    wg = _calc_rel_pdf_components(x, mu, Lambda, chol)
     m = _calc_vector_components(x, mu, Lambda, chol)
 
     if chol:
@@ -115,6 +128,36 @@ def normed_hess(x, w, mu, Lambda, chol=False):
 
     return np.einsum('nk, nkij -> nij', wg, H)/sum_wg[:, np.newaxis, np.newaxis]
 
+def H2(w, mu, Lambda, chol=False):
+    """
+    Calculate entropy based on 0th-order Taylor expansion of the logarithm
+    about each of the mixture component means.
+
+    Parameters:
+        w: (K,) numpy vector of weights.
+        mu: (K, D) numpy array of means.
+        Lambda: (K, D, D) numpy array of precision matrices.
+    """
+    K = w.shape[0]
+    h = normed_grad(mu, w, mu, Lambda, chol)
+    H = normed_hess(mu, w, mu, Lambda, chol)
+
+    HH = 0
+    if chol:
+        Prec = np.einsum('nij, nlj -> nil', Lambda, Lambda)
+        for idx in range(K):
+            Linvh = solve_triangular(Lambda[idx], h[idx], lower=True)
+            LinvH = solve_triangular(Lambda[idx], H[idx], lower=True)
+            LaminvH = solve_triangular(Lambda[idx].T, LinvH, lower=False)
+            HH += w[idx] * (-Linvh.dot(Linvh) + np.trace(LaminvH))
+    else:
+        Prec = Lambda
+        for idx in range(K):
+            Laminvh = solve(Lambda[idx], h[idx])
+            LaminvH = solve(Lambda[idx], H[idx])
+            HH += w[idx] * (-h[idx].dot(Laminvh) + np.trace(LaminvH))
+
+    return -0.5 * HH
 
 if __name__ == '__main__':
     import scipy.stats as stats
@@ -124,7 +167,7 @@ if __name__ == '__main__':
     K, D, N = 3, 5, 7
     mu = np.random.randn(K, D)
     x = mu[0] + 0.01 * np.random.randn(N, D)
-    L = np.tril(np.random.randn(K, D, D))
+    L = 5 * np.tril(np.random.randn(K, D, D))
     for k in range(K):
         for d in range(D):
             L[k, d, d] = np.abs(L[k, d, d])
@@ -190,3 +233,14 @@ if __name__ == '__main__':
     normed_H = np.einsum('nk, knij -> nij', wg, Hg)/wg_sum[:, np.newaxis, np.newaxis]
     npt.assert_allclose(normed_H, normed_hess(x, w, mu, Lambda))
     npt.assert_allclose(normed_H, normed_hess(x, w, mu, L, True))
+
+    # test H2
+    hh = normed_grad(mu, w, mu, Lambda)
+    HH = normed_hess(mu, w, mu, Lambda)
+
+    Laminv = np.array([np.linalg.inv(Lambda[k]) for k in range(K)])
+    terms = [-hh[k].dot(Laminv[k].dot(hh[k])) + np.trace(Laminv[k].dot(HH[k])) for k in range(K)]
+    np_H2 = -0.5 * np.sum(w * np.array(terms))
+    this_H2 = H2(w, mu, Lambda)
+    npt.assert_allclose(np_H2, H2(w, mu, Lambda))
+    npt.assert_allclose(np_H2, H2(w, mu, L, True))
