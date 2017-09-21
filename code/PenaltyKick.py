@@ -24,6 +24,7 @@ SOFTWARE.
 import theano.tensor as T
 import numpy as np
 from numpy.random import *
+from collections import OrderedDict
 import sys
 
 sys.path.append('./lib/')
@@ -179,11 +180,17 @@ class SGVB_GBDS():#(Trainable):
                            self.yDim_goalie * 2 + self.yDim_ball * 2)
         q = self.mrec.getSample()
         cost = 0
+        updates = OrderedDict()
         if self.isTrainingGenerativeModel or self.isTrainingRecognitionModel:
-            cost += self.mprior_goalie.evaluateLogDensity(
+            ld1, upd1 = self.mprior_goalie.evaluateLogDensity(
                 q[:, self.yCols_goalie], self.Y)
-            cost += self.mprior_ball.evaluateLogDensity(
+            ld2, upd2 = self.mprior_ball.evaluateLogDensity(
                 q[:, self.yCols_ball], self.Y)
+            cost += ld1 + ld2
+            for k, v in upd1.iteritems():
+                updates[k] = v
+            for k, v in upd2.iteritems():
+                updates[k] = v
         if self.isTrainingRecognitionModel:
             cost += self.mrec.evalEntropy()
         if self.isTrainingCGANGenerator:
@@ -207,6 +214,6 @@ class SGVB_GBDS():#(Trainable):
             cost += self.mprior_goalie.evaluateGANLoss(
                 self.g0[:, self.yCols_goalie], mode='D')
         if self.isTrainingGenerativeModel or self.isTrainingRecognitionModel:
-            return cost / self.Y.shape[0]
+            return (cost / self.Y.shape[0]), updates
         else:  # training GAN
             return cost
