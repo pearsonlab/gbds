@@ -131,7 +131,7 @@ def normed_hess(x, w, mu, Lambda, chol=False):
 
 def H2(w, mu, Lambda, chol=False):
     """
-    Calculate entropy based on 0th-order Taylor expansion of the logarithm
+    Calculate entropy based on 2nd-order Taylor expansion of the logarithm
     about each of the mixture component means.
 
     Parameters:
@@ -162,6 +162,16 @@ def H2(w, mu, Lambda, chol=False):
     return -0.5 * HH
 
 def H(w, mu, Lambda, chol=False):
+    """
+    Calculate entropy based on Taylor expansion of the logarithm
+    about each of the mixture component means.
+
+    Parameters:
+        w: (K,) numpy vector of weights.
+        mu: (K, D) numpy array of means.
+        Lambda: (K, D, D) numpy array of precision matrices.
+        chol: is Lambda in fact the Cholesky factor L of the precision?
+    """
     return H0(w, mu, Lambda, chol) + H2(w, mu, Lambda, chol)
 
 def H_lb(w, mu, Lambda, chol=False):
