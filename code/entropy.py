@@ -161,6 +161,9 @@ def H2(w, mu, Lambda, chol=False):
 
     return -0.5 * HH
 
+def H(w, mu, Lambda, chol=False):
+    return H0(w, mu, Lambda, chol) + H2(w, mu, Lambda, chol)
+
 def H_lb(w, mu, Lambda, chol=False):
     """
     Calculate a lower bound on the entropy of the mixture.
