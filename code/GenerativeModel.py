@@ -25,6 +25,7 @@ import theano
 import lasagne
 import theano.tensor as T
 import theano.tensor.nlinalg as Tla
+import theano.tensor.slinalg as Tsla
 from theano.tensor.signal import conv
 import numpy as np
 from theano.tensor.shared_randomstreams import RandomStreams
@@ -235,11 +236,9 @@ class GBDS(GenerativeModel):
         self.GMM_k = GenerativeParams['GMM_k']  # number of GMM components
         self.GMM_net = GenerativeParams['GMM_net']
         self.GMM_mu = lasagne.layers.SliceLayer(self.GMM_net, axis=1, indices=slice(None, yDim * self.GMM_k))
-        self.GMM_lambda = lasagne.layers.NonlinearityLayer(
-            lasagne.layers.SliceLayer(
-                self.GMM_net, axis=1,
-                indices=slice(yDim * self.GMM_k, 2 * yDim * self.GMM_k)),
-            nonlinearity=lasagne.nonlinearities.softplus)
+        self.GMM_lambda = lasagne.layers.SliceLayer(
+            self.GMM_net, axis=1,
+            indices=slice(yDim * self.GMM_k, None))
         self.GMM_w_vals = theano.shared(value=np.ones((self.GMM_k),
                                         dtype=theano.config.floatX),
                                         name='GMM_w_vals', borrow=True)
@@ -325,17 +324,53 @@ class GBDS(GenerativeModel):
         """
         Sample from GMM based on highest weight component
         """
-        mu = lasagne.layers.get_output(self.GMM_mu, inputs=states).reshape(
+        # All k component mu's
+        all_mu = lasagne.layers.get_output(self.GMM_mu, inputs=states).reshape(
             (-1, self.GMM_k, self.yDim))
-        lmbda = lasagne.layers.get_output(self.GMM_lambda, inputs=states).reshape(
-            (-1, self.GMM_k, self.yDim))
-        def select_components(sub_mu, sub_lmbda):
+        
+        # All unconstrained k component L's (Cholesky of precision matrix)
+        all_unc_L = lasagne.layers.get_output(self.GMM_lambda, inputs=states).reshape(
+            (-1, self.yDim, self.yDim)) # use this shape so we can scan over the first dimension
+        
+        # constrain L and get lambda, (1 + lambda)^(-1), L', and L'^(-1)
+        def constrain_L(unc_L):
+            # Contrain L to be lower triangular with positive diagonal
+            L = (T.diag(T.nnet.softplus(T.diag(unc_L))) +
+                 T.tril(unc_L, k=-1))
+            # Create precision matrix
+            lmbda = L.dot(L.T)
+            # Get (1 + lambda)^(-1)
+            lmbda_p1_inv = Tla.matrix_inverse(1 + lmbda)
+            # Get L' with cholesky decomposition
+            L_prime = Tsla.cholesky(1 + lmbda)
+            # Get L'^(-1)
+            L_prime_inv = Tla.matrix_inverse(L_prime)
+            return lmbda, lmbda_p1_inv, L_prime, L_prime_inv
+    
+        (all_lmbda, all_lmbda_p1_inv, all_L_prime, all_L_prime_inv), _ = theano.scan(
+            fn=constrain_L,
+            outputs_info=None,
+            sequences=[all_unc_L])
+
+        # reshape to separate out components per time L_prime
+        all_lmbda = all_lmbda.reshape((-1, self.GMM_k, self.yDim, self.yDim))
+        all_lmbda_p1_inv = all_lmbda_p1_inv.reshape((-1, self.GMM_k, self.yDim, self.yDim))
+        all_L_prime = all_L_prime.reshape((-1, self.GMM_k, self.yDim, self.yDim))
+        all_L_prime_inv = all_L_prime_inv.reshape((-1, self.GMM_k, self.yDim, self.yDim))
+        
+        # select one of K components from GMM (for each time point)
+        def select_components(sub_mu, sub_lmbda, sub_lmbda_p1_inv, sub_L_prime, sub_L_prime_inv):
             component = self.srng.choice(size=[1], a=T.arange(self.GMM_k), p=self.GMM_w.flatten())  # weighted sample of index
-            return sub_mu[component[0], :], sub_lmbda[component[0], :]
-        (mu_k, lmbda_k), _ = theano.scan(fn=select_components,
-                                         outputs_info=None,
-                                         sequences=[mu, lmbda])
-        return mu, lmbda, mu_k, lmbda_k
+            return (sub_mu[component[0]], sub_lmbda[component[0]], sub_lmbda_p1_inv[component[0]],
+                    sub_L_prime[component[0]], sub_L_prime_inv[component[0]])
+
+        (mu_k, lmbda_k, lmbda_p1_inv_k, L_prime_k, L_prime_inv_k), _ = theano.scan(
+            fn=select_components,
+            outputs_info=None,
+            sequences=[all_mu, all_lmbda, all_lmbda_p1_inv, all_L_prime, all_L_prime_inv])
+
+        return (all_mu, all_lmbda, all_lmbda_p1_inv, all_L_prime, all_L_prime_inv,
+                mu_k, lmbda_k, lmbda_p1_inv_k, L_prime_k, L_prime_inv_k)
 
     def get_preds(self, Y, training=False, post_g=None,
                   gen_g=None, extra_conds=None):
@@ -354,18 +389,29 @@ class GBDS(GenerativeModel):
         states = self.get_states(Y, max_vel=self.all_vel)
         if extra_conds is not None:
             states = T.horizontal_stack(states, extra_conds)
-        all_mu, all_lmbda, mu_k, lmbda_k = self.sample_GMM(states)
-        # Draw next goals based on force
+        (all_mu, all_lmbda, all_lmbda_p1_inv, all_L_prime, all_L_prime_inv,
+         mu_k, lmbda_k, lmbda_p1_inv_k, L_prime_k, L_prime_inv_k) = self.sample_GMM(states)
+        # Draw next goals
         if post_g is not None:  # Calculate next goals from posterior
-            next_g = ((post_g[:-1].reshape((-1, 1, self.yDim)) + all_mu * all_lmbda) / (1 + all_lmbda))
+            def get_mu_prime(sub_lmbda_p1_inv, sub_g, sub_lmbda, sub_mu):
+                # get mu_prime for each K
+                part = (sub_g + T.batched_dot(sub_lmbda, sub_mu))
+                sub_mu_prime = T.batched_dot(sub_lmbda_p1_inv, part)
+                return sub_mu_prime
+            # get mu_prime for each timepoint
+            next_g, _ = theano.scan( # call "next_g" for consistency with rest of code
+                fn=get_mu_prime, outputs_info=None,
+                sequences=[all_lmbda_p1_inv,
+                           post_g[:-1].reshape((-1, 1, self.yDim, 1)),
+                           all_lmbda, all_mu.reshape((-1, self.GMM_k, self.yDim, 1))])
+
         elif gen_g is not None:  # Generate next goals
             # Get external force from GMM
-            goal = ((gen_g[(-1,)] + lmbda_k[(-1,)] * mu_k[(-1,)]) /
-                    (1 + lmbda_k[(-1,)]))
-            var = self.sigma**2 / (1 + lmbda_k[(-1,)])
-            goal += self.srng.normal(goal.shape) * T.sqrt(var)
+            part = gen_g[-1].reshape((self.yDim, 1)) + T.dot(lmbda_k[-1], mu_k[-1].reshape((self.yDim, 1)))
+            mu_prime = T.dot(lmbda_p1_inv_k[-1], part).T
+            goal = mu_prime + (L_prime_inv_k[-1].T * self.sigma.T).dot(self.srng.normal((self.yDim, 1))).T
             next_g = T.vertical_stack(gen_g[1:],
-                                      goal)
+                                      goal.reshape((1, self.yDim)))
         else:
             raise Exception("Goal states must be provided " +
                             "(either posterior or generated)")
@@ -400,7 +446,7 @@ class GBDS(GenerativeModel):
         # get predicted Y
         Ypred = Y[:, self.yCols] + self.vel.reshape((1, self.yDim)) * T.tanh(Upred)
 
-        return all_mu, all_lmbda, next_g, Upred, Ypred
+        return all_L_prime, next_g, Upred, Ypred
 
     def evaluateLogDensity(self, g, Y):
         '''
@@ -416,21 +462,40 @@ class GBDS(GenerativeModel):
         # Get predictions for next timestep (at each timestep except for last)
         # disregard last timestep bc we don't know the next value, thus, we
         # can't calculate the error
-        all_mu, all_lmbda, g_pred, Upred, Ypred = self.get_preds(Y[:-1],
-                                                     training=True,
-                                                     post_g=g)
+        all_L_prime, g_pred, Upred, Ypred = self.get_preds(Y[:-1],
+                                                           training=True,
+                                                           post_g=g)
         # calculate loss on control signal
         resU = U_true - Upred
         LogDensity = -(resU**2 / (2 * self.eps**2)).sum()
         LogDensity -= 0.5 * T.log(2 * np.pi) + T.log(self.eps).sum()
         
         # calculate GMM loss
-        w_brdcst = self.GMM_w.reshape((1, self.GMM_k, 1))
-        gmm_res_g = g[1:].reshape((-1, 1, self.yDim)) - g_pred
-        gmm_term = T.log(w_brdcst + 1e-8) - ((1 + all_lmbda) / (2 * self.sigma.reshape((1,1,-1))**2)) * gmm_res_g**2
-        gmm_term += 0.5 * T.log(1 + all_lmbda) - 0.5 * T.log(2 * np.pi) - T.log(self.sigma.reshape((1,1,-1)))
-        # LogDensity += T.log(T.exp(gmm_term).sum(axis=1)).sum()
-        LogDensity += logsumexp(gmm_term.sum(axis=2), axis=1).sum()
+        w_brdcst = self.GMM_w.reshape((self.GMM_k, 1, 1))
+        
+        # get gmm term for each timepoint
+        def get_gmm_term(sub_L_prime, sub_mu_prime, sub_g):
+            gmm_term = (T.batched_dot(sub_L_prime.dimshuffle((0,2,1)),
+                                      sub_g - sub_mu_prime)**2).sum(axis=2, keepdims=True)
+            gmm_term /= 2 * self.sigma.reshape((1, -1, 1))**2
+            gmm_term = T.log(w_brdcst + 1e-8) - gmm_term
+            gmm_term -= (self.yDim / 2.0) * T.log(2 * np.pi * self.sigma.reshape((1, -1, 1))**2)
+            def get_trace(sub_sub_log_L_prime): # need to scan again in order to get trace for each component for each timepoint
+                return Tla.trace(sub_sub_log_L_prime)
+            k_traces, _ = theano.scan(fn=get_trace,
+                                      outputs_info=None,
+                                      sequences=[T.log(sub_L_prime + 1e-8)])
+            gmm_term += k_traces.reshape((self.GMM_k, 1, 1))
+            return gmm_term
+
+        gmm_term, _ = theano.scan(
+            fn=get_gmm_term,
+            outputs_info=None,
+            sequences=[all_L_prime,
+                       g_pred,
+                       g[1:].reshape((-1, 1, self.yDim, 1))])
+
+        LogDensity += logsumexp(gmm_term.sum(axis=(2,3)), axis=1).sum()
 
         # linear penalty on goal state escaping game space
         if self.pen_g[0] is not None:
