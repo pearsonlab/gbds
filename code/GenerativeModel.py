@@ -422,10 +422,9 @@ class GBDS(GenerativeModel):
             error = next_g - Y[:, self.yCols]
 
         # Assume control starts at zero
+        norm_yDiff = (Y[1:, self.yCols] - Y[:-1, self.yCols]) / self.vel.reshape((1, self.yDim))
         Uprev = T.vertical_stack(T.zeros((1, self.yDim)),
-                                 T.arctanh((Y[1:, self.yCols] -
-                                           Y[:-1, self.yCols]) /
-                                 self.vel.reshape((1, self.yDim))))
+                                 T.arctanh(np.min(norm_yDiff, 0.9999999))) # for stability
         Udiff = []
         for i in range(self.yDim):
             # get current error signal and corresponding filter
